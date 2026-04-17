@@ -70,6 +70,13 @@ Then run:
 python scripts/test_chatgpt_submit.py --browser-mode cdp
 ```
 
+By default, the automation reuses an existing ChatGPT tab. To force a fresh tab:
+
+```sh
+python main.py --ask-chatgpt --new-tab
+python scripts/test_chatgpt_submit.py --browser-mode cdp --new-tab
+```
+
 ### Pick a Microphone
 
 ```sh

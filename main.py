@@ -35,6 +35,11 @@ def main() -> None:
         default=DEFAULT_CDP_URL,
         help=f"Chrome DevTools URL for --browser-mode cdp. Default: {DEFAULT_CDP_URL}",
     )
+    parser.add_argument(
+        "--new-tab",
+        action="store_true",
+        help="Open a new ChatGPT tab instead of reusing an existing one.",
+    )
     args = parser.parse_args()
 
     if args.list_mics:
@@ -59,6 +64,7 @@ def main() -> None:
             transcript,
             browser_mode=args.browser_mode,
             cdp_url=args.cdp_url,
+            new_tab=args.new_tab,
         )
 
 

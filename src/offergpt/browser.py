@@ -7,7 +7,7 @@ from typing import Literal
 CHATGPT_URL = "https://chatgpt.com/"
 DEFAULT_BROWSER_PROFILE = Path.home() / ".offergpt" / "browser-profile"
 DEFAULT_CDP_URL = "http://127.0.0.1:9222"
-TYPE_DELAY_MS = 25
+PERSISTENT_TYPE_DELAY_MS = 25
 BrowserMode = Literal["persistent", "cdp"]
 
 
@@ -26,6 +26,7 @@ def submit_to_chatgpt(
     profile_dir: Path = DEFAULT_BROWSER_PROFILE,
     browser_mode: BrowserMode = "persistent",
     cdp_url: str = DEFAULT_CDP_URL,
+    new_tab: bool = False,
 ) -> None:
     if not prompt.strip():
         print("Skipping ChatGPT submission because the transcript is empty.")
@@ -40,12 +41,10 @@ def submit_to_chatgpt(
         session = open_browser_session(playwright, profile_dir, browser_mode, cdp_url)
 
         try:
-            page = session.context.new_page()
-            page.goto(CHATGPT_URL, wait_until="domcontentloaded")
-            page.wait_for_load_state("networkidle", timeout=30_000)
+            page = open_chatgpt_page(session.context, browser_mode, new_tab)
 
             try:
-                prompt_box = find_prompt_box(page, timeout=15_000)
+                prompt_box = find_prompt_box(page, timeout=prompt_box_timeout(browser_mode))
             except PlaywrightTimeoutError:
                 print("Could not find the ChatGPT prompt box yet.")
                 print("If ChatGPT is asking you to log in, finish logging in inside the browser.")
@@ -53,11 +52,7 @@ def submit_to_chatgpt(
                 page.goto(CHATGPT_URL, wait_until="domcontentloaded")
                 prompt_box = find_prompt_box(page, timeout=60_000)
 
-            prompt_box.click()
-            sleep(0.5)
-            prompt_box.press_sequentially(prompt, delay=TYPE_DELAY_MS)
-            sleep(0.5)
-            prompt_box.press("Enter")
+            type_and_submit(prompt_box, prompt, browser_mode)
             print("Submitted transcript to ChatGPT.")
             input("Browser is open. Press ENTER here when you are ready to close it.")
         except PlaywrightTimeoutError as exc:
@@ -124,6 +119,44 @@ def connect_to_cdp_browser(playwright, cdp_url: str) -> BrowserSession:
 
     # Leave the CDP browser running so you can stay logged in between tests.
     return BrowserSession(context=context, close_browser=False)
+
+
+def open_chatgpt_page(context, browser_mode: BrowserMode, new_tab: bool):
+    if not new_tab:
+        for page in context.pages:
+            if page.url.startswith(CHATGPT_URL):
+                print("Reusing existing ChatGPT tab.")
+                page.bring_to_front()
+                return page
+
+    page = context.new_page()
+    page.goto(CHATGPT_URL, wait_until="domcontentloaded")
+
+    if browser_mode == "cdp":
+        return page
+
+    page.wait_for_load_state("networkidle", timeout=30_000)
+    return page
+
+
+def prompt_box_timeout(browser_mode: BrowserMode) -> int:
+    if browser_mode == "cdp":
+        return 5_000
+    return 15_000
+
+
+def type_and_submit(prompt_box, prompt: str, browser_mode: BrowserMode) -> None:
+    if browser_mode == "cdp":
+        prompt_box.click()
+        prompt_box.fill(prompt)
+        prompt_box.press("Enter")
+        return
+
+    prompt_box.click()
+    sleep(0.5)
+    prompt_box.press_sequentially(prompt, delay=PERSISTENT_TYPE_DELAY_MS)
+    sleep(0.5)
+    prompt_box.press("Enter")
 
 
 def find_prompt_box(page, timeout: int):
