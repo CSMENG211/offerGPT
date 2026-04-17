@@ -1,13 +1,32 @@
+from dataclasses import dataclass
 from pathlib import Path
 from time import sleep
+from typing import Literal
 
 
 CHATGPT_URL = "https://chatgpt.com/"
 DEFAULT_BROWSER_PROFILE = Path.home() / ".offergpt" / "browser-profile"
+DEFAULT_CDP_URL = "http://127.0.0.1:9222"
 TYPE_DELAY_MS = 25
+BrowserMode = Literal["persistent", "cdp"]
 
 
-def submit_to_chatgpt(prompt: str, profile_dir: Path = DEFAULT_BROWSER_PROFILE) -> None:
+@dataclass
+class BrowserSession:
+    context: object
+    close_browser: bool = True
+
+    def close(self) -> None:
+        if self.close_browser:
+            self.context.close()
+
+
+def submit_to_chatgpt(
+    prompt: str,
+    profile_dir: Path = DEFAULT_BROWSER_PROFILE,
+    browser_mode: BrowserMode = "persistent",
+    cdp_url: str = DEFAULT_CDP_URL,
+) -> None:
     if not prompt.strip():
         print("Skipping ChatGPT submission because the transcript is empty.")
         return
@@ -18,10 +37,10 @@ def submit_to_chatgpt(prompt: str, profile_dir: Path = DEFAULT_BROWSER_PROFILE) 
     profile_dir.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as playwright:
-        browser = launch_browser(playwright, profile_dir)
+        session = open_browser_session(playwright, profile_dir, browser_mode, cdp_url)
 
         try:
-            page = browser.new_page()
+            page = session.context.new_page()
             page.goto(CHATGPT_URL, wait_until="domcontentloaded")
             page.wait_for_load_state("networkidle", timeout=30_000)
 
@@ -46,10 +65,21 @@ def submit_to_chatgpt(prompt: str, profile_dir: Path = DEFAULT_BROWSER_PROFILE) 
             print("If this is the first run, log in to ChatGPT in the opened browser, then run again.")
             raise SystemExit(1) from exc
         finally:
-            browser.close()
+            session.close()
 
 
-def launch_browser(playwright, profile_dir: Path):
+def open_browser_session(
+    playwright,
+    profile_dir: Path,
+    browser_mode: BrowserMode,
+    cdp_url: str,
+) -> BrowserSession:
+    if browser_mode == "cdp":
+        return connect_to_cdp_browser(playwright, cdp_url)
+    return launch_persistent_browser(playwright, profile_dir)
+
+
+def launch_persistent_browser(playwright, profile_dir: Path) -> BrowserSession:
     launch_options = {
         "user_data_dir": str(profile_dir),
         "headless": False,
@@ -62,14 +92,38 @@ def launch_browser(playwright, profile_dir: Path):
 
     try:
         print("Opening ChatGPT with installed Google Chrome...")
-        return playwright.chromium.launch_persistent_context(
+        context = playwright.chromium.launch_persistent_context(
             channel="chrome",
             **launch_options,
         )
     except Exception as exc:
         print(f"Could not launch installed Chrome: {exc}")
         print("Falling back to Playwright Chromium...")
-        return playwright.chromium.launch_persistent_context(**launch_options)
+        context = playwright.chromium.launch_persistent_context(**launch_options)
+
+    return BrowserSession(context=context, close_browser=True)
+
+
+def connect_to_cdp_browser(playwright, cdp_url: str) -> BrowserSession:
+    print(f"Connecting to Chrome over CDP at {cdp_url}...")
+    try:
+        browser = playwright.chromium.connect_over_cdp(cdp_url)
+    except Exception as exc:
+        print(f"Could not connect to Chrome over CDP: {exc}")
+        print()
+        print("Launch an automation-friendly Chrome first with:")
+        print("  open -na 'Google Chrome' --args \\")
+        print("    --remote-debugging-port=9222 \\")
+        print("    --user-data-dir=$HOME/.offergpt/cdp-browser-profile")
+        raise SystemExit(1) from exc
+
+    if browser.contexts:
+        context = browser.contexts[0]
+    else:
+        context = browser.new_context(no_viewport=True)
+
+    # Leave the CDP browser running so you can stay logged in between tests.
+    return BrowserSession(context=context, close_browser=False)
 
 
 def find_prompt_box(page, timeout: int):

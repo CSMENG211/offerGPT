@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from offergpt.audio import list_microphones, record_until_enter
-from offergpt.browser import submit_to_chatgpt
+from offergpt.browser import DEFAULT_CDP_URL, submit_to_chatgpt
 from offergpt.transcription import DEFAULT_MODEL, transcribe
 
 
@@ -23,6 +23,17 @@ def main() -> None:
         "--ask-chatgpt",
         action="store_true",
         help="Open ChatGPT in a browser, paste the transcript, and press Enter.",
+    )
+    parser.add_argument(
+        "--browser-mode",
+        choices=("persistent", "cdp"),
+        default="persistent",
+        help="Browser automation mode for --ask-chatgpt. Default: persistent",
+    )
+    parser.add_argument(
+        "--cdp-url",
+        default=DEFAULT_CDP_URL,
+        help=f"Chrome DevTools URL for --browser-mode cdp. Default: {DEFAULT_CDP_URL}",
     )
     args = parser.parse_args()
 
@@ -44,7 +55,11 @@ def main() -> None:
     print(transcript.strip() or "(No speech detected.)")
 
     if args.ask_chatgpt:
-        submit_to_chatgpt(transcript)
+        submit_to_chatgpt(
+            transcript,
+            browser_mode=args.browser_mode,
+            cdp_url=args.cdp_url,
+        )
 
 
 if __name__ == "__main__":

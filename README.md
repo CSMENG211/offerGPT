@@ -48,6 +48,28 @@ python main.py --ask-chatgpt
 The first time, ChatGPT may ask you to log in. The browser profile is stored at
 `~/.offergpt/browser-profile`, so future runs can reuse that login.
 
+There are two browser modes:
+
+```sh
+python main.py --ask-chatgpt --browser-mode persistent
+python main.py --ask-chatgpt --browser-mode cdp
+```
+
+`persistent` launches installed Chrome with a dedicated profile. `cdp` connects
+to a Chrome instance that you start with remote debugging:
+
+```sh
+open -na 'Google Chrome' --args \
+  --remote-debugging-port=9222 \
+  --user-data-dir=$HOME/.offergpt/cdp-browser-profile
+```
+
+Then run:
+
+```sh
+python scripts/test_chatgpt_submit.py --browser-mode cdp
+```
+
 ### Pick a Microphone
 
 ```sh
