@@ -16,18 +16,12 @@ def main() -> None:
         default="cdp",
         help="Browser automation mode. Default: cdp",
     )
-    parser.add_argument(
-        "--new-tab",
-        action="store_true",
-        help="Open a new ChatGPT tab instead of reusing an existing one.",
-    )
     args = parser.parse_args()
 
     prompt = read_prompt()
     submit_to_chatgpt(
         prompt,
         browser_mode=args.browser_mode,
-        new_tab=args.new_tab,
     )
 
 

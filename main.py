@@ -7,7 +7,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from offergpt.audio import (
     capture_utterance,
-    list_microphones,
     record_until_enter,
 )
 from offergpt.browser import submit_to_chatgpt
@@ -27,34 +26,27 @@ from offergpt.question_triggers import (
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Record microphone audio and transcribe it.")
-    parser.add_argument("--list-mics", action="store_true", help="List available input devices.")
-    parser.add_argument("--device", type=int, help="Input device index from --list-mics.")
     parser.add_argument(
-        "--ask-chatgpt",
-        action="store_true",
-        help="Open ChatGPT in a browser, paste the transcript, and press Enter.",
+        "--no-ask-chatgpt",
+        action="store_false",
+        dest="ask_chatgpt",
+        default=True,
+        help="Transcribe without submitting the prompt to ChatGPT.",
     )
     parser.add_argument(
         "--browser-mode",
         choices=("persistent", "cdp"),
         default="cdp",
-        help="Browser automation mode for --ask-chatgpt. Default: cdp",
+        help="Browser automation mode for ChatGPT submission. Default: cdp",
     )
     parser.add_argument(
-        "--new-tab",
-        action="store_true",
-        help="Open a new ChatGPT tab instead of reusing an existing one.",
-    )
-    parser.add_argument(
-        "--listen",
-        action="store_true",
-        help="Continuously listen for triggered utterances.",
+        "--no-listen",
+        action="store_false",
+        dest="listen",
+        default=True,
+        help="Record one utterance manually instead of continuously listening.",
     )
     args = parser.parse_args()
-
-    if args.list_mics:
-        list_microphones()
-        return
 
     if args.listen:
         listen_loop(args)
@@ -69,7 +61,6 @@ def main() -> None:
         submit_to_chatgpt(
             transcript,
             browser_mode=args.browser_mode,
-            new_tab=args.new_tab,
         )
 
 
@@ -79,7 +70,7 @@ def record_and_transcribe_once(args) -> str:
 
     with tempfile.TemporaryDirectory(prefix="offergpt-") as temp_dir:
         audio_path = Path(temp_dir) / "recording.wav"
-        record_until_enter(audio_path, args.device)
+        record_until_enter(audio_path, device=None)
 
         print(
             f"Transcribing locally with faster-whisper ({DEFAULT_TRANSCRIPTION_MODEL})...",
@@ -109,7 +100,7 @@ def listen_loop(args) -> None:
                 audio_path = Path(temp_dir) / "utterance.wav"
                 capture_utterance(
                     audio_path,
-                    device=args.device,
+                    device=None,
                     silence_seconds=DEFAULT_SILENCE_SECONDS,
                     silence_threshold=DEFAULT_SILENCE_THRESHOLD,
                     max_record_seconds=DEFAULT_MAX_RECORD_SECONDS,
@@ -140,7 +131,6 @@ def listen_loop(args) -> None:
                 submit_to_chatgpt(
                     prompt,
                     browser_mode=args.browser_mode,
-                    new_tab=args.new_tab,
                 )
             print()
     except KeyboardInterrupt:

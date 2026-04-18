@@ -1,7 +1,8 @@
 ## offerGPT
 
-A small Python prototype for turning microphone input into text locally, then
-using that text as the prompt for a later browser automation step.
+A small Python prototype for continuously listening to microphone input,
+transcribing mock-interview questions locally, then submitting triggered prompts
+to ChatGPT.
 
 This first step captures audio from your microphone and transcribes it locally
 with faster-whisper.
@@ -20,8 +21,8 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Press ENTER to start recording, speak, then press ENTER again to stop and
-transcribe.
+By default, offerGPT listens continuously and submits triggered prompts to
+ChatGPT.
 
 ### Listen Loop
 
@@ -29,7 +30,7 @@ Continuously listen for mock-interview questions, then stop the utterance after
 silence:
 
 ```sh
-python main.py --listen
+python main.py
 ```
 
 By default, listen mode catches explicit question-start phrases and transcripts
@@ -47,14 +48,14 @@ Audio stop trigger: silence lasts N seconds
 Question trigger: question mark detected, or explicit start phrase
 ```
 
-Send triggered prompts to ChatGPT:
-
-```sh
-python main.py --listen --ask-chatgpt
-```
-
 Question start phrases, silence timing, and the local transcription model live
 in `src/offergpt/constants.py`.
+
+To transcribe triggered prompts without sending them to ChatGPT:
+
+```sh
+python main.py --no-ask-chatgpt
+```
 
 ### Ask ChatGPT
 
@@ -64,10 +65,11 @@ Install Playwright's browser once:
 python -m playwright install chromium
 ```
 
-Then record, transcribe, open ChatGPT, paste the transcript, and submit it:
+Then listen, transcribe triggered prompts, open ChatGPT, paste each prompt, and
+submit it:
 
 ```sh
-python main.py --ask-chatgpt
+python main.py
 ```
 
 The first time, ChatGPT may ask you to log in. The browser profile is stored at
@@ -76,13 +78,13 @@ The first time, ChatGPT may ask you to log in. The browser profile is stored at
 There are two browser modes:
 
 ```sh
-python main.py --ask-chatgpt --browser-mode cdp
-python main.py --ask-chatgpt --browser-mode persistent
+python main.py --browser-mode cdp
+python main.py --browser-mode persistent
 ```
 
 `cdp` is the default and connects to a Chrome instance that you start with
 remote debugging. `persistent` launches installed Chrome with a dedicated
-profile and closes that browser when you press ENTER in the terminal.
+profile.
 
 ```sh
 open -na 'Google Chrome' --args \
@@ -93,21 +95,15 @@ open -na 'Google Chrome' --args \
 Then run:
 
 ```sh
-python scripts/test_chatgpt_submit.py --browser-mode cdp
+python main.py --browser-mode cdp
 ```
 
-By default, the automation reuses an existing ChatGPT tab. To force a fresh tab:
+### One-Shot Recording
+
+To record one utterance manually instead of listening continuously:
 
 ```sh
-python main.py --ask-chatgpt --new-tab
-python scripts/test_chatgpt_submit.py --browser-mode cdp --new-tab
-```
-
-### Pick a Microphone
-
-```sh
-python main.py --list-mics
-python main.py --device 2
+python main.py --no-listen
 ```
 
 On macOS, your terminal may ask for microphone permission the first time this
