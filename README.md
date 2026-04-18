@@ -23,13 +23,38 @@ python main.py
 Press ENTER to start recording, speak, then press ENTER again to stop and
 transcribe.
 
-Choose a local model size:
+### Listen Loop
+
+Continuously listen for mock-interview questions, then stop the utterance after
+silence:
 
 ```sh
-python main.py --model tiny
-python main.py --model small
-python main.py --model medium
+python main.py --listen
 ```
+
+By default, listen mode catches explicit question-start phrases and transcripts
+that end in a question mark, like:
+
+```text
+How would you debug this?
+```
+
+The listen loop uses three trigger layers:
+
+```text
+Audio start trigger: speech begins
+Audio stop trigger: silence lasts N seconds
+Question trigger: question mark detected, or explicit start phrase
+```
+
+Send triggered prompts to ChatGPT:
+
+```sh
+python main.py --listen --ask-chatgpt
+```
+
+Question start phrases, silence timing, and the local transcription model live
+in `src/offergpt/constants.py`.
 
 ### Ask ChatGPT
 

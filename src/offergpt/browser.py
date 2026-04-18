@@ -5,11 +5,12 @@ import subprocess
 from time import sleep
 from typing import Literal
 
-
-CHATGPT_URL = "https://chatgpt.com/"
-DEFAULT_BROWSER_PROFILE = Path.home() / ".offergpt" / "browser-profile"
-DEFAULT_CDP_URL = "http://127.0.0.1:9222"
-PERSISTENT_TYPE_DELAY_MS = 25
+from offergpt.constants import (
+    CHATGPT_URL,
+    DEFAULT_BROWSER_PROFILE,
+    DEFAULT_CDP_URL,
+    PERSISTENT_TYPE_DELAY_MS,
+)
 BrowserMode = Literal["persistent", "cdp"]
 
 

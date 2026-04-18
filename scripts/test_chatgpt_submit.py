@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from offergpt.browser import DEFAULT_CDP_URL, submit_to_chatgpt
+from offergpt.browser import submit_to_chatgpt
 
 
 def main() -> None:
@@ -15,11 +15,6 @@ def main() -> None:
         choices=("persistent", "cdp"),
         default="cdp",
         help="Browser automation mode. Default: cdp",
-    )
-    parser.add_argument(
-        "--cdp-url",
-        default=DEFAULT_CDP_URL,
-        help=f"Chrome DevTools URL for --browser-mode cdp. Default: {DEFAULT_CDP_URL}",
     )
     parser.add_argument(
         "--new-tab",
@@ -32,7 +27,6 @@ def main() -> None:
     submit_to_chatgpt(
         prompt,
         browser_mode=args.browser_mode,
-        cdp_url=args.cdp_url,
         new_tab=args.new_tab,
     )
 
