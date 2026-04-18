@@ -2,4 +2,5 @@ out/
 target/
 .venv/
 __pycache__/
-*.pyc
+*.py[cod]
+python.log

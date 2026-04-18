@@ -4,6 +4,8 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from loguru import logger
+
 from audio import capture_utterance, record_until_enter, stream_utterance_segments
 from browser import BrowserMode, submit_to_chatgpt
 from constants import (
@@ -44,8 +46,7 @@ def run(options: RuntimeOptions) -> None:
 
     transcript = record_and_transcribe_once()
 
-    print("\nTranscript:")
-    print(transcript.strip() or "(No speech detected.)")
+    logger.info("Transcript:\n{}", transcript.strip() or "(No speech detected.)")
 
     if options.ask_chatgpt:
         submit_prompt(transcript, options, include_mode_prompt=True)
@@ -53,17 +54,13 @@ def run(options: RuntimeOptions) -> None:
 
 def record_and_transcribe_once() -> str:
     """Record one manually-delimited utterance and return its transcript."""
-    print("Press ENTER to start recording.")
-    input()
+    input("Press ENTER to start recording.")
 
     with tempfile.TemporaryDirectory(prefix="secondvoice-") as temp_dir:
         audio_path = Path(temp_dir) / "recording.wav"
         record_until_enter(audio_path)
 
-        print(
-            f"Transcribing locally with faster-whisper ({DEFAULT_TRANSCRIPTION_MODEL})...",
-            flush=True,
-        )
+        logger.info("Transcribing locally with faster-whisper ({})...", DEFAULT_TRANSCRIPTION_MODEL)
         return transcribe(audio_path, DEFAULT_TRANSCRIPTION_MODEL)
 
 
@@ -87,8 +84,7 @@ def batch_loop(options: RuntimeOptions) -> None:
             if not should_handle_prompt(prompt):
                 continue
 
-            print("\nTriggered prompt:")
-            print(prompt)
+            logger.info("Triggered prompt:\n{}", prompt)
 
             if options.ask_chatgpt:
                 submit_prompt(
@@ -97,9 +93,9 @@ def batch_loop(options: RuntimeOptions) -> None:
                     include_mode_prompt=is_first_submission,
                 )
                 is_first_submission = False
-            print()
+            logger.info("")
     except KeyboardInterrupt:
-        print("\nStopped listening.")
+        logger.info("Stopped listening.")
 
 
 def stream_loop(options: RuntimeOptions) -> None:
@@ -111,51 +107,90 @@ def stream_loop(options: RuntimeOptions) -> None:
     with tempfile.TemporaryDirectory(prefix="secondvoice-eval-") as temp_dir:
         segment_queue: queue.Queue[Path | Exception] = queue.Queue()
         stop_event = threading.Event()
-        recorder = threading.Thread(
-            target=stream_utterance_segments,
-            args=(
-                Path(temp_dir),
-                segment_queue,
-                stop_event,
-                STREAM_SILENCE_SECONDS,
-                DEFAULT_SILENCE_THRESHOLD,
-            ),
+        recorder = start_stream_recorder(
+            Path(temp_dir),
+            segment_queue,
+            stop_event,
         )
-        recorder.start()
 
         try:
             transcriber = LocalTranscriber(DEFAULT_TRANSCRIPTION_MODEL)
             while True:
-                try:
-                    item = segment_queue.get(timeout=0.2)
-                except queue.Empty:
+                audio_path = next_stream_segment(segment_queue)
+                if audio_path is None:
                     continue
 
-                if isinstance(item, Exception):
-                    raise item
-
-                audio_path = item
-                transcript = transcriber.transcribe(audio_path)
-                audio_path.unlink(missing_ok=True)
-                print_transcript(transcript)
-
-                if not transcript:
-                    print("No speech detected. Listening again.\n")
-                    continue
-
-                if options.ask_chatgpt:
-                    submit_to_chatgpt(
-                        build_stream_prompt(transcript, is_first_submission),
-                        browser_mode=options.browser_mode,
-                    )
+                submitted = process_stream_segment(
+                    audio_path,
+                    transcriber,
+                    options,
+                    include_mode_prompt=is_first_submission,
+                )
+                if submitted:
                     is_first_submission = False
-                print()
         except KeyboardInterrupt:
-            print("\nStopping stream mode...")
+            logger.info("Stopping stream mode...")
         finally:
             stop_event.set()
             recorder.join()
-            print("Stopped stream mode.")
+            logger.info("Stopped stream mode.")
+
+
+def start_stream_recorder(
+    output_dir: Path,
+    segment_queue: queue.Queue[Path | Exception],
+    stop_event: threading.Event,
+) -> threading.Thread:
+    """Start the background recorder that feeds completed segments into a queue."""
+    recorder = threading.Thread(
+        target=stream_utterance_segments,
+        args=(
+            output_dir,
+            segment_queue,
+            stop_event,
+            STREAM_SILENCE_SECONDS,
+            DEFAULT_SILENCE_THRESHOLD,
+        ),
+    )
+    recorder.start()
+    return recorder
+
+
+def next_stream_segment(segment_queue: queue.Queue[Path | Exception]) -> Path | None:
+    """Return the next completed stream segment, or None while waiting."""
+    try:
+        item = segment_queue.get(timeout=0.2)
+    except queue.Empty:
+        return None
+
+    if isinstance(item, Exception):
+        raise item
+
+    return item
+
+
+def process_stream_segment(
+    audio_path: Path,
+    transcriber: LocalTranscriber,
+    options: RuntimeOptions,
+    include_mode_prompt: bool,
+) -> bool:
+    """Transcribe one stream segment and optionally submit it for feedback."""
+    transcript = transcriber.transcribe(audio_path)
+    audio_path.unlink(missing_ok=True)
+    print_transcript(transcript)
+
+    if not transcript:
+        logger.info("No speech detected. Listening again.")
+        return False
+
+    if options.ask_chatgpt:
+        submit_to_chatgpt(
+            build_stream_prompt(transcript, include_mode_prompt),
+            browser_mode=options.browser_mode,
+        )
+    logger.info("")
+    return options.ask_chatgpt
 
 
 def capture_and_transcribe_utterance(transcriber: LocalTranscriber) -> str:
@@ -201,41 +236,40 @@ def build_stream_prompt(transcript: str, include_mode_prompt: bool) -> str:
 
 def print_batch_mode_banner(prompt_mode: PromptMode) -> None:
     """Print the active batch-mode trigger settings."""
-    print("Batch mode is active.")
-    print("Audio start trigger: speech begins")
-    print(f"Audio stop trigger: {DEFAULT_SILENCE_SECONDS:g}s of silence")
-    print(f"Max recording length: {DEFAULT_MAX_RECORD_SECONDS:g}s")
-    print(f"Prompt preset: {prompt_mode}")
-    print(f"Question trigger mode: {DEFAULT_QUESTION_TRIGGER_MODE}")
+    logger.info("Batch mode is active.")
+    logger.info("Audio start trigger: speech begins")
+    logger.info("Audio stop trigger: {:g}s of silence", DEFAULT_SILENCE_SECONDS)
+    logger.info("Max recording length: {:g}s", DEFAULT_MAX_RECORD_SECONDS)
+    logger.info("Prompt preset: {}", prompt_mode)
+    logger.info("Question trigger mode: {}", DEFAULT_QUESTION_TRIGGER_MODE)
     if DEFAULT_QUESTION_TRIGGER_MODE in ("phrase", "smart"):
-        print(f"Question start pattern: {DEFAULT_QUESTION_START_PATTERN!r}")
-    print("Press Ctrl+C to stop.")
+        logger.info("Question start pattern: {!r}", DEFAULT_QUESTION_START_PATTERN)
+    logger.info("Press Ctrl+C to stop.")
 
 
 def print_stream_mode_banner() -> None:
     """Print the active stream-mode trigger settings."""
-    print("Stream mode is active.")
-    print("Audio start trigger: speech begins")
-    print(f"Segment trigger: {STREAM_SILENCE_SECONDS:g}s of silence")
-    print("Recording continues while segments are transcribed and submitted")
-    print("Question detection: disabled")
-    print("Press Ctrl+C to stop.")
+    logger.info("Stream mode is active.")
+    logger.info("Audio start trigger: speech begins")
+    logger.info("Segment trigger: {:g}s of silence", STREAM_SILENCE_SECONDS)
+    logger.info("Recording continues while segments are transcribed and submitted")
+    logger.info("Question detection: disabled")
+    logger.info("Press Ctrl+C to stop.")
 
 
 def print_transcript(transcript: str) -> None:
     """Print the transcript from the most recent captured utterance."""
-    print("\nHeard:")
-    print(transcript.strip() or "(No speech detected.)")
+    logger.info("Heard:\n{}", transcript.strip() or "(No speech detected.)")
 
 
 def should_handle_prompt(prompt: str | None) -> bool:
     """Return whether a detected prompt is non-empty and ready for handling."""
     if prompt is None:
-        print("No interview prompt detected. Listening again.\n")
+        logger.info("No interview prompt detected. Listening again.")
         return False
 
     if not prompt:
-        print("Prompt detector fired, but the prompt was empty. Listening again.\n")
+        logger.info("Prompt detector fired, but the prompt was empty. Listening again.")
         return False
 
     return True

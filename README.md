@@ -23,6 +23,8 @@ python main.py
 By default, SecondVoice listens continuously and submits triggered prompts to
 ChatGPT.
 
+Logs are written to `python.log` in the current working directory.
+
 ### Listen Loop
 
 Continuously listen for mock-interview questions, then stop the utterance after

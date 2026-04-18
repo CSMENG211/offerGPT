@@ -5,6 +5,8 @@ import subprocess
 from time import sleep
 from typing import Literal
 
+from loguru import logger
+
 from constants import (
     CHATGPT_URL,
     DEFAULT_BROWSER_PROFILE,
@@ -37,7 +39,7 @@ def submit_to_chatgpt(
 ) -> None:
     """Open ChatGPT, place the prompt into the composer, and submit it."""
     if not prompt.strip():
-        print("Skipping ChatGPT submission because the transcript is empty.")
+        logger.info("Skipping ChatGPT submission because the transcript is empty.")
         return
 
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -54,21 +56,21 @@ def submit_to_chatgpt(
             try:
                 prompt_box = find_prompt_box(page, timeout=prompt_box_timeout(browser_mode))
             except PlaywrightTimeoutError:
-                print("Could not find the ChatGPT prompt box yet.")
-                print("If ChatGPT is asking you to log in, finish logging in inside the browser.")
+                logger.warning("Could not find the ChatGPT prompt box yet.")
+                logger.warning("If ChatGPT is asking you to log in, finish logging in inside the browser.")
                 input("Press ENTER here after ChatGPT is open and ready for a prompt.")
                 page.goto(CHATGPT_URL, wait_until="domcontentloaded")
                 prompt_box = find_prompt_box(page, timeout=60_000)
 
             type_and_submit(prompt_box, prompt, browser_mode)
-            print("Submitted transcript to ChatGPT.")
+            logger.info("Submitted transcript to ChatGPT.")
             if browser_mode == "cdp":
                 activate_chrome()
             if session.close_browser:
                 input("Browser is open. Press ENTER here when you are ready to close it.")
         except PlaywrightTimeoutError as exc:
-            print("Could not find the ChatGPT prompt box.")
-            print("If this is the first run, log in to ChatGPT in the opened browser, then run again.")
+            logger.error("Could not find the ChatGPT prompt box.")
+            logger.error("If this is the first run, log in to ChatGPT in the opened browser, then run again.")
             raise SystemExit(1) from exc
         finally:
             session.close()
@@ -99,14 +101,14 @@ def launch_persistent_browser(playwright, profile_dir: Path) -> BrowserSession:
     }
 
     try:
-        print("Opening ChatGPT with installed Google Chrome...")
+        logger.info("Opening ChatGPT with installed Google Chrome...")
         context = playwright.chromium.launch_persistent_context(
             channel="chrome",
             **launch_options,
         )
     except Exception as exc:
-        print(f"Could not launch installed Chrome: {exc}")
-        print("Falling back to Playwright Chromium...")
+        logger.warning("Could not launch installed Chrome: {}", exc)
+        logger.info("Falling back to Playwright Chromium...")
         context = playwright.chromium.launch_persistent_context(**launch_options)
 
     return BrowserSession(context=context, close_browser=True)
@@ -114,16 +116,17 @@ def launch_persistent_browser(playwright, profile_dir: Path) -> BrowserSession:
 
 def connect_to_cdp_browser(playwright, cdp_url: str) -> BrowserSession:
     """Connect to an already-running Chrome instance over CDP."""
-    print(f"Connecting to Chrome over CDP at {cdp_url}...")
+    logger.info("Connecting to Chrome over CDP at {}...", cdp_url)
     try:
         browser = playwright.chromium.connect_over_cdp(cdp_url)
     except Exception as exc:
-        print(f"Could not connect to Chrome over CDP: {exc}")
-        print()
-        print("Launch an automation-friendly Chrome first with:")
-        print("  open -na 'Google Chrome' --args \\")
-        print("    --remote-debugging-port=9222 \\")
-        print("    --user-data-dir=$HOME/.secondvoice/cdp-browser-profile")
+        logger.error("Could not connect to Chrome over CDP: {}", exc)
+        logger.error(
+            "Launch an automation-friendly Chrome first with:\n"
+            "  open -na 'Google Chrome' --args \\\n"
+            "    --remote-debugging-port=9222 \\\n"
+            "    --user-data-dir=$HOME/.secondvoice/cdp-browser-profile"
+        )
         raise SystemExit(1) from exc
 
     if browser.contexts:
@@ -139,7 +142,7 @@ def open_chatgpt_page(context, browser_mode: BrowserMode):
     """Reuse an existing ChatGPT tab or open one when needed."""
     for page in context.pages:
         if page.url.startswith(CHATGPT_URL):
-            print("Reusing existing ChatGPT tab.")
+            logger.info("Reusing existing ChatGPT tab.")
             page.bring_to_front()
             if browser_mode == "cdp":
                 activate_chrome()
