@@ -27,8 +27,8 @@ def main() -> None:
     parser.add_argument(
         "--browser-mode",
         choices=("persistent", "cdp"),
-        default="persistent",
-        help="Browser automation mode for --ask-chatgpt. Default: persistent",
+        default="cdp",
+        help="Browser automation mode for --ask-chatgpt. Default: cdp",
     )
     parser.add_argument(
         "--cdp-url",

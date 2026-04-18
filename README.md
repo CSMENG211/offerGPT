@@ -51,12 +51,13 @@ The first time, ChatGPT may ask you to log in. The browser profile is stored at
 There are two browser modes:
 
 ```sh
-python main.py --ask-chatgpt --browser-mode persistent
 python main.py --ask-chatgpt --browser-mode cdp
+python main.py --ask-chatgpt --browser-mode persistent
 ```
 
-`persistent` launches installed Chrome with a dedicated profile. `cdp` connects
-to a Chrome instance that you start with remote debugging:
+`cdp` is the default and connects to a Chrome instance that you start with
+remote debugging. `persistent` launches installed Chrome with a dedicated
+profile and closes that browser when you press ENTER in the terminal.
 
 ```sh
 open -na 'Google Chrome' --args \

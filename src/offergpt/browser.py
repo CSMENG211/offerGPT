@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
+import platform
+import subprocess
 from time import sleep
 from typing import Literal
 
@@ -15,6 +17,7 @@ BrowserMode = Literal["persistent", "cdp"]
 class BrowserSession:
     context: object
     close_browser: bool = True
+    browser: object | None = None
 
     def close(self) -> None:
         if self.close_browser:
@@ -24,7 +27,7 @@ class BrowserSession:
 def submit_to_chatgpt(
     prompt: str,
     profile_dir: Path = DEFAULT_BROWSER_PROFILE,
-    browser_mode: BrowserMode = "persistent",
+    browser_mode: BrowserMode = "cdp",
     cdp_url: str = DEFAULT_CDP_URL,
     new_tab: bool = False,
 ) -> None:
@@ -54,7 +57,10 @@ def submit_to_chatgpt(
 
             type_and_submit(prompt_box, prompt, browser_mode)
             print("Submitted transcript to ChatGPT.")
-            input("Browser is open. Press ENTER here when you are ready to close it.")
+            if browser_mode == "cdp":
+                activate_chrome()
+            if session.close_browser:
+                input("Browser is open. Press ENTER here when you are ready to close it.")
         except PlaywrightTimeoutError as exc:
             print("Could not find the ChatGPT prompt box.")
             print("If this is the first run, log in to ChatGPT in the opened browser, then run again.")
@@ -118,7 +124,7 @@ def connect_to_cdp_browser(playwright, cdp_url: str) -> BrowserSession:
         context = browser.new_context(no_viewport=True)
 
     # Leave the CDP browser running so you can stay logged in between tests.
-    return BrowserSession(context=context, close_browser=False)
+    return BrowserSession(context=context, close_browser=False, browser=browser)
 
 
 def open_chatgpt_page(context, browser_mode: BrowserMode, new_tab: bool):
@@ -127,6 +133,8 @@ def open_chatgpt_page(context, browser_mode: BrowserMode, new_tab: bool):
             if page.url.startswith(CHATGPT_URL):
                 print("Reusing existing ChatGPT tab.")
                 page.bring_to_front()
+                if browser_mode == "cdp":
+                    activate_chrome()
                 return page
 
     page = context.new_page()
@@ -137,6 +145,18 @@ def open_chatgpt_page(context, browser_mode: BrowserMode, new_tab: bool):
 
     page.wait_for_load_state("networkidle", timeout=30_000)
     return page
+
+
+def activate_chrome() -> None:
+    if platform.system() != "Darwin":
+        return
+
+    subprocess.run(
+        ["osascript", "-e", 'tell application "Google Chrome" to activate'],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def prompt_box_timeout(browser_mode: BrowserMode) -> int:
