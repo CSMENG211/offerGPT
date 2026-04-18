@@ -9,12 +9,13 @@ AUDIO_CHUNK_SECONDS = 0.1
 AUDIO_PRE_ROLL_SECONDS = 0.3
 
 DEFAULT_SILENCE_SECONDS = 6.8
+STREAM_SILENCE_SECONDS = 3.0
 DEFAULT_SILENCE_THRESHOLD = 500
-DEFAULT_MAX_RECORD_SECONDS = 120.0
+DEFAULT_MAX_RECORD_SECONDS = 600.0
 
 DEFAULT_TRANSCRIPTION_MODEL = "small"
 DEFAULT_QUESTION_TRIGGER_MODE = "smart"
-DEFAULT_ANSWER_MODE = "helpful"
+DEFAULT_PROMPT_MODE = "batch"
 
 CHATGPT_URL = "https://chatgpt.com/"
 DEFAULT_BROWSER_PROFILE = Path.home() / ".secondvoice" / "browser-profile"
@@ -23,9 +24,9 @@ PERSISTENT_TYPE_DELAY_MS = 25
 
 DEFAULT_QUESTION_START_PATTERN = r"\b(?:(?:ok|okay)\s+so|so\s+the)\b"
 
-AnswerMode = Literal["generic", "helpful"]
+PromptMode = Literal["generic", "batch", "stream"]
 
-ANSWER_MODE_PROMPTS: dict[AnswerMode, str] = {
+PROMPTS: dict[PromptMode, str] = {
     "generic": (
         "You are SecondVoice, a voice-triggered GPT answer assistant. "
         "For every user question in this chat, give a brief read-aloud answer "
@@ -40,7 +41,7 @@ ANSWER_MODE_PROMPTS: dict[AnswerMode, str] = {
         "blockers are confirmed. Keep the answer concise and directly usable "
         "out loud."
     ),
-    "helpful": (
+    "batch": (
         "You are SecondVoice, a voice-triggered GPT answer assistant. "
         "For every user question in this chat, give a very concise answer for "
         "interview practice using exactly two short paragraphs. First paragraph: "
@@ -51,5 +52,14 @@ ANSWER_MODE_PROMPTS: dict[AnswerMode, str] = {
         "the key idea and the minimal intuition needed to recognize the pattern "
         "again. Include a very short implementation description only when it "
         "makes the idea easier to demonstrate."
+    ),
+    "stream": (
+        "You are SecondVoice, a mock interview evaluator. For each transcript "
+        "segment, give concise, practical feedback that is longer than the "
+        "batch mode when useful, but still direct and to the point. Focus on "
+        "clarity, structure, technical correctness, missed signals, and one or "
+        "two concrete ways to improve the answer. Do not answer the interview "
+        "question for the candidate unless a short example phrasing would make "
+        "the feedback more actionable. Do not invent facts beyond the transcript."
     ),
 }

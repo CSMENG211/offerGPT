@@ -50,15 +50,19 @@ Question trigger: question mark detected, or explicit start phrase
 Question start phrases, silence timing, and the local transcription model live
 in `src/constants.py`.
 
-Choose an answer style:
+Choose a preset:
 
 ```sh
-python main.py --mode helpful
-python main.py --mode generic
+python main.py --batch
+python main.py --generic
+python main.py --stream
 ```
 
-`helpful` gives concise, useful answers for interview-style practice. `generic`
-gives safe, neutral workplace answers without invented commitments.
+`batch` uses batch capture with concise interview-help answers after a
+question-triggered utterance is complete. `generic` uses the same batch capture
+flow with a neutral workplace-answer prompt. `stream` listens continuously for
+mock-interview answers and sends each transcript segment to ChatGPT for concise
+feedback.
 
 The selected mode prompt is prepended only to the first question sent to ChatGPT
 in each run.
@@ -116,6 +120,25 @@ To record one utterance manually instead of listening continuously:
 
 ```sh
 python main.py --no-listen
+```
+
+### Stream Mode
+
+To continuously record mock-interview answers, transcribe each answer segment,
+and submit it to ChatGPT for evaluation and improvement feedback:
+
+```sh
+python main.py --stream
+```
+
+This mode does not use question detection. Recording starts automatically when
+speech begins. After 3 seconds of silence, SecondVoice transcribes that segment,
+sends it to ChatGPT, and continues listening. The microphone stream keeps
+running while completed segments are being transcribed and submitted. To only
+print transcripts without sending them to ChatGPT:
+
+```sh
+python main.py --stream --no-ask-chatgpt
 ```
 
 On macOS, your terminal may ask for microphone permission the first time this

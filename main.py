@@ -15,6 +15,7 @@ def main() -> None:
 def parse_args() -> RuntimeOptions:
     """Parse CLI flags into runtime options."""
     parser = argparse.ArgumentParser(description="Listen for questions and send answers to GPT.")
+    parser.set_defaults(prompt_preset="batch")
     parser.add_argument(
         "--no-ask-chatgpt",
         action="store_false",
@@ -35,18 +36,46 @@ def parse_args() -> RuntimeOptions:
         default=True,
         help="Record one utterance manually instead of continuously listening.",
     )
-    parser.add_argument(
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--mode",
-        choices=("generic", "helpful"),
-        default="helpful",
-        help="Answer style to instruct ChatGPT with on the first prompt. Default: helpful",
+        choices=("generic", "batch", "stream"),
+        dest="prompt_preset",
+        help=(
+            "Preset to run. generic and batch use batch capture; stream uses "
+            "continuous stream capture. Default: batch"
+        ),
+    )
+    mode_group.add_argument(
+        "--generic",
+        action="store_const",
+        const="generic",
+        dest="prompt_preset",
+        help="Use batch capture with the generic workplace-answer prompt.",
+    )
+    mode_group.add_argument(
+        "--batch",
+        action="store_const",
+        const="batch",
+        dest="prompt_preset",
+        help="Use batch capture with the interview-help prompt.",
+    )
+    mode_group.add_argument(
+        "--stream",
+        action="store_const",
+        const="stream",
+        dest="prompt_preset",
+        help=(
+            "Continuously transcribe voice-triggered interview segments and "
+            "submit them for evaluation."
+        ),
     )
     args = parser.parse_args()
     return RuntimeOptions(
         ask_chatgpt=args.ask_chatgpt,
         browser_mode=args.browser_mode,
         listen=args.listen,
-        answer_mode=args.mode,
+        prompt_mode=args.prompt_preset,
     )
 
 
