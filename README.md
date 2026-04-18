@@ -134,7 +134,7 @@ python main.py --stream
 ```
 
 This mode does not use question detection. Recording starts automatically when
-speech begins. After 3 seconds of silence, SecondVoice transcribes that segment,
+speech begins. After 5 seconds of silence, SecondVoice transcribes that segment,
 sends it to ChatGPT, and continues listening. The microphone stream keeps
 running while completed segments are being transcribed and submitted. To only
 print transcripts without sending them to ChatGPT:

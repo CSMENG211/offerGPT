@@ -9,7 +9,7 @@ AUDIO_CHUNK_SECONDS = 0.1
 AUDIO_PRE_ROLL_SECONDS = 0.3
 
 DEFAULT_SILENCE_SECONDS = 6.8
-STREAM_SILENCE_SECONDS = 3.0
+STREAM_SILENCE_SECONDS = 5.0
 DEFAULT_SILENCE_THRESHOLD = 500
 DEFAULT_MAX_RECORD_SECONDS = 600.0
 
@@ -58,8 +58,7 @@ PROMPTS: dict[PromptMode, str] = {
         "segment, give concise, practical feedback that is longer than the "
         "batch mode when useful, but still direct and to the point. Focus on "
         "clarity, structure, technical correctness, missed signals, and one or "
-        "two concrete ways to improve the answer. Do not answer the interview "
-        "question for the candidate unless a short example phrasing would make "
-        "the feedback more actionable. Do not invent facts beyond the transcript."
+        "two concrete ways to improve the answer. Give a short example phrasing that "
+        "would make the feedback more actionable. Do not invent facts beyond the transcript."
     ),
 }
