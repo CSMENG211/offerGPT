@@ -1,8 +1,7 @@
-## offerGPT
+## SecondVoice
 
-A small Python prototype for continuously listening to microphone input,
-transcribing mock-interview questions locally, then submitting triggered prompts
-to ChatGPT.
+SecondVoice is a voice-triggered GPT answer assistant for concise read-aloud
+responses.
 
 This first step captures audio from your microphone and transcribes it locally
 with faster-whisper.
@@ -21,7 +20,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-By default, offerGPT listens continuously and submits triggered prompts to
+By default, SecondVoice listens continuously and submits triggered prompts to
 ChatGPT.
 
 ### Listen Loop
@@ -51,6 +50,19 @@ Question trigger: question mark detected, or explicit start phrase
 Question start phrases, silence timing, and the local transcription model live
 in `src/constants.py`.
 
+Choose an answer style:
+
+```sh
+python main.py --mode helpful
+python main.py --mode generic
+```
+
+`helpful` gives concise, useful answers for interview-style practice. `generic`
+gives safe, neutral workplace answers without invented commitments.
+
+The selected mode prompt is prepended only to the first question sent to ChatGPT
+in each run.
+
 To transcribe triggered prompts without sending them to ChatGPT:
 
 ```sh
@@ -73,7 +85,7 @@ python main.py
 ```
 
 The first time, ChatGPT may ask you to log in. The browser profile is stored at
-`~/.offergpt/browser-profile`, so future runs can reuse that login.
+`~/.secondvoice/browser-profile`, so future runs can reuse that login.
 
 There are two browser modes:
 
@@ -89,7 +101,7 @@ profile.
 ```sh
 open -na 'Google Chrome' --args \
   --remote-debugging-port=9222 \
-  --user-data-dir=$HOME/.offergpt/cdp-browser-profile
+  --user-data-dir=$HOME/.secondvoice/cdp-browser-profile
 ```
 
 Then run:

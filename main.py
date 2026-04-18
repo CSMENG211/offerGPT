@@ -8,13 +8,13 @@ from app import RuntimeOptions, run
 
 
 def main() -> None:
-    """Parse command-line options and start offerGPT."""
+    """Parse command-line options and start SecondVoice."""
     run(parse_args())
 
 
 def parse_args() -> RuntimeOptions:
     """Parse CLI flags into runtime options."""
-    parser = argparse.ArgumentParser(description="Record microphone audio and transcribe it.")
+    parser = argparse.ArgumentParser(description="Listen for questions and send answers to GPT.")
     parser.add_argument(
         "--no-ask-chatgpt",
         action="store_false",
@@ -35,11 +35,18 @@ def parse_args() -> RuntimeOptions:
         default=True,
         help="Record one utterance manually instead of continuously listening.",
     )
+    parser.add_argument(
+        "--mode",
+        choices=("generic", "helpful"),
+        default="helpful",
+        help="Answer style to instruct ChatGPT with on the first prompt. Default: helpful",
+    )
     args = parser.parse_args()
     return RuntimeOptions(
         ask_chatgpt=args.ask_chatgpt,
         browser_mode=args.browser_mode,
         listen=args.listen,
+        answer_mode=args.mode,
     )
 
 

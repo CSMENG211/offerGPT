@@ -5,6 +5,9 @@ from pathlib import Path
 from audio import capture_utterance, record_until_enter
 from browser import BrowserMode, submit_to_chatgpt
 from constants import (
+    ANSWER_MODE_PROMPTS,
+    AnswerMode,
+    DEFAULT_ANSWER_MODE,
     DEFAULT_MAX_RECORD_SECONDS,
     DEFAULT_QUESTION_START_PHRASES,
     DEFAULT_QUESTION_TRIGGER_MODE,
@@ -23,6 +26,7 @@ class RuntimeOptions:
     ask_chatgpt: bool = True
     browser_mode: BrowserMode = "cdp"
     listen: bool = True
+    answer_mode: AnswerMode = DEFAULT_ANSWER_MODE
 
 
 def run(options: RuntimeOptions) -> None:
@@ -37,7 +41,7 @@ def run(options: RuntimeOptions) -> None:
     print(transcript.strip() or "(No speech detected.)")
 
     if options.ask_chatgpt:
-        submit_to_chatgpt(transcript, browser_mode=options.browser_mode)
+        submit_prompt(transcript, options, include_mode_prompt=True)
 
 
 def record_and_transcribe_once() -> str:
@@ -45,7 +49,7 @@ def record_and_transcribe_once() -> str:
     print("Press ENTER to start recording.")
     input()
 
-    with tempfile.TemporaryDirectory(prefix="offergpt-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="secondvoice-") as temp_dir:
         audio_path = Path(temp_dir) / "recording.wav"
         record_until_enter(audio_path)
 
@@ -60,6 +64,7 @@ def listen_loop(options: RuntimeOptions) -> None:
     """Continuously capture utterances, extract prompts, and optionally submit them."""
     question_start_phrases = list(DEFAULT_QUESTION_START_PHRASES)
     transcriber = LocalTranscriber(DEFAULT_TRANSCRIPTION_MODEL)
+    is_first_submission = True
 
     print_listen_mode_banner(question_start_phrases)
 
@@ -80,7 +85,12 @@ def listen_loop(options: RuntimeOptions) -> None:
             print(prompt)
 
             if options.ask_chatgpt:
-                submit_to_chatgpt(prompt, browser_mode=options.browser_mode)
+                submit_prompt(
+                    prompt,
+                    options,
+                    include_mode_prompt=is_first_submission,
+                )
+                is_first_submission = False
             print()
     except KeyboardInterrupt:
         print("\nStopped listening.")
@@ -88,7 +98,7 @@ def listen_loop(options: RuntimeOptions) -> None:
 
 def capture_and_transcribe_utterance(transcriber: LocalTranscriber) -> str:
     """Capture one speech segment using silence detection and transcribe it."""
-    with tempfile.TemporaryDirectory(prefix="offergpt-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="secondvoice-") as temp_dir:
         audio_path = Path(temp_dir) / "utterance.wav"
         capture_utterance(
             audio_path,
@@ -97,6 +107,26 @@ def capture_and_transcribe_utterance(transcriber: LocalTranscriber) -> str:
             max_record_seconds=DEFAULT_MAX_RECORD_SECONDS,
         )
         return transcriber.transcribe(audio_path)
+
+
+def submit_prompt(prompt: str, options: RuntimeOptions, include_mode_prompt: bool) -> None:
+    """Submit a prompt to ChatGPT, prepending mode instructions once per run."""
+    submit_to_chatgpt(
+        build_chatgpt_prompt(prompt, options.answer_mode, include_mode_prompt),
+        browser_mode=options.browser_mode,
+    )
+
+
+def build_chatgpt_prompt(
+    prompt: str,
+    answer_mode: AnswerMode,
+    include_mode_prompt: bool,
+) -> str:
+    """Return the ChatGPT prompt with optional first-message mode instructions."""
+    if not include_mode_prompt:
+        return prompt
+
+    return f"{ANSWER_MODE_PROMPTS[answer_mode]}\n\nQuestion:\n{prompt}"
 
 
 def print_listen_mode_banner(question_start_phrases: list[str]) -> None:

@@ -123,7 +123,7 @@ def connect_to_cdp_browser(playwright, cdp_url: str) -> BrowserSession:
         print("Launch an automation-friendly Chrome first with:")
         print("  open -na 'Google Chrome' --args \\")
         print("    --remote-debugging-port=9222 \\")
-        print("    --user-data-dir=$HOME/.offergpt/cdp-browser-profile")
+        print("    --user-data-dir=$HOME/.secondvoice/cdp-browser-profile")
         raise SystemExit(1) from exc
 
     if browser.contexts:
