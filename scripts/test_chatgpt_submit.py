@@ -5,10 +5,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from offergpt.browser import submit_to_chatgpt
+from browser import submit_to_chatgpt
 
 
 def main() -> None:
+    """Read a prompt and submit it to ChatGPT through browser automation."""
     parser = argparse.ArgumentParser(description="Submit a stdin prompt to ChatGPT.")
     parser.add_argument(
         "--browser-mode",
@@ -26,6 +27,7 @@ def main() -> None:
 
 
 def read_prompt() -> str:
+    """Read a prompt from stdin or interactively from the terminal."""
     if not sys.stdin.isatty():
         return sys.stdin.read().strip()
 

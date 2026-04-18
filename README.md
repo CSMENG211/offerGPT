@@ -49,7 +49,7 @@ Question trigger: question mark detected, or explicit start phrase
 ```
 
 Question start phrases, silence timing, and the local transcription model live
-in `src/offergpt/constants.py`.
+in `src/constants.py`.
 
 To transcribe triggered prompts without sending them to ChatGPT:
 

@@ -1,12 +1,15 @@
 from pathlib import Path
 
-from offergpt.constants import DEFAULT_TRANSCRIPTION_MODEL
+from constants import DEFAULT_TRANSCRIPTION_MODEL
 
 DEFAULT_MODEL = DEFAULT_TRANSCRIPTION_MODEL
 
 
 class LocalTranscriber:
+    """Reusable wrapper around a local faster-whisper model."""
+
     def __init__(self, model: str = DEFAULT_MODEL) -> None:
+        """Load the configured Whisper model into memory."""
         from faster_whisper import WhisperModel
 
         print("Loading local Whisper model. The first run may download model files...", flush=True)
@@ -14,6 +17,7 @@ class LocalTranscriber:
         print("Model loaded.", flush=True)
 
     def transcribe(self, audio_path: Path) -> str:
+        """Transcribe a WAV file and return plain text."""
         print("Decoding audio...", flush=True)
         segments, _ = self.model.transcribe(str(audio_path), beam_size=5)
 
@@ -29,4 +33,5 @@ class LocalTranscriber:
 
 
 def transcribe(audio_path: Path, model: str = DEFAULT_MODEL) -> str:
+    """Transcribe one audio file with a short-lived local model instance."""
     return LocalTranscriber(model).transcribe(audio_path)

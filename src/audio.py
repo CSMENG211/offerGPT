@@ -7,7 +7,7 @@ from pathlib import Path
 
 import sounddevice as sd
 
-from offergpt.constants import (
+from constants import (
     AUDIO_CHANNELS,
     AUDIO_CHUNK_SECONDS,
     AUDIO_PRE_ROLL_SECONDS,
@@ -19,18 +19,11 @@ from offergpt.constants import (
 )
 
 
-def list_microphones() -> None:
-    print("Input devices:")
-    for index, device in enumerate(sd.query_devices()):
-        if device["max_input_channels"] > 0:
-            default_marker = " (default)" if index == sd.default.device[0] else ""
-            print(f"{index}: {device['name']}{default_marker}")
-
-
-def record_until_enter(output_path: Path, device: int | None) -> None:
+def record_until_enter(output_path: Path) -> None:
+    """Record from the default microphone until the user presses ENTER."""
     audio_queue: queue.Queue[bytes] = queue.Queue()
 
-    def callback(indata, frames, time, status) -> None:
+    def callback(indata, _frames, _time, status) -> None:
         if status:
             print(f"Audio warning: {status}")
         audio_queue.put(bytes(indata))
@@ -40,7 +33,6 @@ def record_until_enter(output_path: Path, device: int | None) -> None:
         samplerate=AUDIO_SAMPLE_RATE,
         channels=AUDIO_CHANNELS,
         dtype="int16",
-        device=device,
         callback=callback,
     ):
         input()
@@ -55,11 +47,11 @@ def record_until_enter(output_path: Path, device: int | None) -> None:
 
 def capture_utterance(
     output_path: Path,
-    device: int | None,
     silence_seconds: float = DEFAULT_SILENCE_SECONDS,
     silence_threshold: int = DEFAULT_SILENCE_THRESHOLD,
     max_record_seconds: float = DEFAULT_MAX_RECORD_SECONDS,
 ) -> None:
+    """Capture one utterance from the default microphone using silence detection."""
     blocksize = int(AUDIO_SAMPLE_RATE * AUDIO_CHUNK_SECONDS)
     silence_blocks_needed = max(1, math.ceil(silence_seconds / AUDIO_CHUNK_SECONDS))
     max_blocks = max(1, math.ceil(max_record_seconds / AUDIO_CHUNK_SECONDS))
@@ -73,7 +65,6 @@ def capture_utterance(
         samplerate=AUDIO_SAMPLE_RATE,
         channels=AUDIO_CHANNELS,
         dtype="int16",
-        device=device,
         blocksize=blocksize,
     ) as stream:
         while True:
@@ -112,6 +103,7 @@ def capture_utterance(
 
 
 def write_wav(output_path: Path, chunks: list[bytes]) -> None:
+    """Write raw int16 audio chunks to a mono WAV file."""
     with wave.open(str(output_path), "wb") as wav_file:
         wav_file.setnchannels(AUDIO_CHANNELS)
         wav_file.setsampwidth(AUDIO_SAMPLE_WIDTH_BYTES)
@@ -121,6 +113,7 @@ def write_wav(output_path: Path, chunks: list[bytes]) -> None:
 
 
 def rms_level(chunk: bytes) -> float:
+    """Calculate the root-mean-square amplitude for an int16 audio chunk."""
     if not chunk:
         return 0.0
 

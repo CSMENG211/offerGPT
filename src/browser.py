@@ -5,22 +5,26 @@ import subprocess
 from time import sleep
 from typing import Literal
 
-from offergpt.constants import (
+from constants import (
     CHATGPT_URL,
     DEFAULT_BROWSER_PROFILE,
     DEFAULT_CDP_URL,
     PERSISTENT_TYPE_DELAY_MS,
 )
+
 BrowserMode = Literal["persistent", "cdp"]
 
 
 @dataclass
 class BrowserSession:
+    """Browser resources opened or attached for one ChatGPT submission."""
+
     context: object
     close_browser: bool = True
     browser: object | None = None
 
     def close(self) -> None:
+        """Close browser resources that this process owns."""
         if self.close_browser:
             self.context.close()
 
@@ -30,8 +34,8 @@ def submit_to_chatgpt(
     profile_dir: Path = DEFAULT_BROWSER_PROFILE,
     browser_mode: BrowserMode = "cdp",
     cdp_url: str = DEFAULT_CDP_URL,
-    new_tab: bool = False,
 ) -> None:
+    """Open ChatGPT, place the prompt into the composer, and submit it."""
     if not prompt.strip():
         print("Skipping ChatGPT submission because the transcript is empty.")
         return
@@ -45,7 +49,7 @@ def submit_to_chatgpt(
         session = open_browser_session(playwright, profile_dir, browser_mode, cdp_url)
 
         try:
-            page = open_chatgpt_page(session.context, browser_mode, new_tab)
+            page = open_chatgpt_page(session.context, browser_mode)
 
             try:
                 prompt_box = find_prompt_box(page, timeout=prompt_box_timeout(browser_mode))
@@ -76,12 +80,14 @@ def open_browser_session(
     browser_mode: BrowserMode,
     cdp_url: str,
 ) -> BrowserSession:
+    """Open a browser context using the selected automation mode."""
     if browser_mode == "cdp":
         return connect_to_cdp_browser(playwright, cdp_url)
     return launch_persistent_browser(playwright, profile_dir)
 
 
 def launch_persistent_browser(playwright, profile_dir: Path) -> BrowserSession:
+    """Launch a visible Chromium browser with a reusable profile directory."""
     launch_options = {
         "user_data_dir": str(profile_dir),
         "headless": False,
@@ -107,6 +113,7 @@ def launch_persistent_browser(playwright, profile_dir: Path) -> BrowserSession:
 
 
 def connect_to_cdp_browser(playwright, cdp_url: str) -> BrowserSession:
+    """Connect to an already-running Chrome instance over CDP."""
     print(f"Connecting to Chrome over CDP at {cdp_url}...")
     try:
         browser = playwright.chromium.connect_over_cdp(cdp_url)
@@ -128,15 +135,15 @@ def connect_to_cdp_browser(playwright, cdp_url: str) -> BrowserSession:
     return BrowserSession(context=context, close_browser=False, browser=browser)
 
 
-def open_chatgpt_page(context, browser_mode: BrowserMode, new_tab: bool):
-    if not new_tab:
-        for page in context.pages:
-            if page.url.startswith(CHATGPT_URL):
-                print("Reusing existing ChatGPT tab.")
-                page.bring_to_front()
-                if browser_mode == "cdp":
-                    activate_chrome()
-                return page
+def open_chatgpt_page(context, browser_mode: BrowserMode):
+    """Reuse an existing ChatGPT tab or open one when needed."""
+    for page in context.pages:
+        if page.url.startswith(CHATGPT_URL):
+            print("Reusing existing ChatGPT tab.")
+            page.bring_to_front()
+            if browser_mode == "cdp":
+                activate_chrome()
+            return page
 
     page = context.new_page()
     page.goto(CHATGPT_URL, wait_until="domcontentloaded")
@@ -149,6 +156,7 @@ def open_chatgpt_page(context, browser_mode: BrowserMode, new_tab: bool):
 
 
 def activate_chrome() -> None:
+    """Bring Google Chrome to the foreground on macOS."""
     if platform.system() != "Darwin":
         return
 
@@ -161,12 +169,14 @@ def activate_chrome() -> None:
 
 
 def prompt_box_timeout(browser_mode: BrowserMode) -> int:
+    """Return how long to wait for ChatGPT's prompt box in each browser mode."""
     if browser_mode == "cdp":
         return 5_000
     return 15_000
 
 
 def type_and_submit(prompt_box, prompt: str, browser_mode: BrowserMode) -> None:
+    """Fill the prompt box and submit the message."""
     if browser_mode == "cdp":
         prompt_box.click()
         prompt_box.fill(prompt)
@@ -181,6 +191,7 @@ def type_and_submit(prompt_box, prompt: str, browser_mode: BrowserMode) -> None:
 
 
 def find_prompt_box(page, timeout: int):
+    """Find the current ChatGPT message composer using known selectors."""
     selectors = [
         "[data-testid='prompt-textarea']",
         "#prompt-textarea",

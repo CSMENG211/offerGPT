@@ -1,7 +1,7 @@
 import re
 from typing import Literal
 
-from offergpt.constants import DEFAULT_QUESTION_START_PHRASES
+from constants import DEFAULT_QUESTION_START_PHRASES
 
 QuestionTriggerMode = Literal["phrase", "smart", "always"]
 
@@ -11,6 +11,7 @@ def extract_question_prompt(
     start_phrases: list[str] | tuple[str, ...] = DEFAULT_QUESTION_START_PHRASES,
     mode: QuestionTriggerMode = "phrase",
 ) -> str | None:
+    """Extract a prompt when the transcript matches the selected trigger mode."""
     if mode == "always":
         return transcript.strip()
 
@@ -28,6 +29,7 @@ def extract_after_question_start_phrase(
     transcript: str,
     start_phrases: list[str] | tuple[str, ...],
 ) -> str | None:
+    """Return transcript text that appears after a configured start phrase."""
     normalized_transcript = normalize(transcript)
 
     for phrase in start_phrases:
@@ -41,10 +43,12 @@ def extract_after_question_start_phrase(
 
 
 def is_question(transcript: str) -> bool:
+    """Return whether a transcript appears to be a direct question."""
     return transcript.strip().endswith("?")
 
 
 def normalize(text: str) -> str:
+    """Lowercase text and collapse punctuation into single spaces."""
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text.lower())).strip()
 
 
@@ -53,6 +57,7 @@ def transcript_after_normalized_index(
     normalized_original: str,
     normalized_index: int,
 ) -> str:
+    """Map a normalized text index back to the corresponding original-word suffix."""
     if normalized_index >= len(normalized_original):
         return ""
 
@@ -70,6 +75,7 @@ def transcript_after_normalized_index(
 
 
 def strip_leading_connector(prompt: str) -> str:
+    """Remove filler words that often connect a trigger phrase to the prompt."""
     cleaned = prompt
     while True:
         next_cleaned = re.sub(
