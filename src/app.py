@@ -229,9 +229,9 @@ def build_chatgpt_prompt(
 def build_stream_prompt(transcript: str, include_mode_prompt: bool) -> str:
     """Return a prompt that asks ChatGPT to evaluate an interview transcript segment."""
     if include_mode_prompt:
-        return f"{PROMPTS['stream']}\n\nTranscript segment:\n{transcript}"
+        return f"{PROMPTS['stream']}\n\nClassify and process this transcript segment:\n{transcript}"
 
-    return f"Evaluate this transcript segment:\n{transcript}"
+    return f"Classify and process this transcript segment:\n{transcript}"
 
 
 def print_batch_mode_banner(prompt_mode: PromptMode) -> None:
@@ -253,7 +253,7 @@ def print_stream_mode_banner() -> None:
     logger.info("Audio start trigger: speech begins")
     logger.info("Segment trigger: {:g}s of silence", STREAM_SILENCE_SECONDS)
     logger.info("Recording continues while segments are transcribed and submitted")
-    logger.info("Question detection: disabled")
+    logger.info("Segment role detection: delegated to ChatGPT")
     logger.info("Press Ctrl+C to stop.")
 
 

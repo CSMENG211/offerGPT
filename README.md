@@ -63,8 +63,9 @@ python main.py --stream
 `batch` uses batch capture with concise interview-help answers after a
 question-triggered utterance is complete. `generic` uses the same batch capture
 flow with a neutral workplace-answer prompt. `stream` listens continuously for
-mock-interview answers and sends each transcript segment to ChatGPT for concise
-feedback.
+mock-interview segments and asks ChatGPT to classify each segment as interviewer
+or interviewee before deciding whether to update problem context or evaluate an
+answer.
 
 The selected mode prompt is prepended only to the first question sent to ChatGPT
 in each run.
@@ -126,18 +127,22 @@ python main.py --no-listen
 
 ### Stream Mode
 
-To continuously record mock-interview answers, transcribe each answer segment,
-and submit it to ChatGPT for evaluation and improvement feedback:
+To continuously record mock-interview segments, transcribe each segment, and
+submit it to ChatGPT for role classification, context tracking, and answer
+feedback:
 
 ```sh
 python main.py --stream
 ```
 
-This mode does not use question detection. Recording starts automatically when
-speech begins. After 5 seconds of silence, SecondVoice transcribes that segment,
-sends it to ChatGPT, and continues listening. The microphone stream keeps
-running while completed segments are being transcribed and submitted. To only
-print transcripts without sending them to ChatGPT:
+This mode does not use local question detection. Recording starts automatically
+when speech begins. After 5 seconds of silence, SecondVoice transcribes that
+segment, sends it to ChatGPT, and continues listening. ChatGPT classifies the
+segment as interviewer or interviewee. Interviewer segments are added to the
+problem context; interviewee segments get an ideal response and evaluation
+against that ideal. The microphone stream keeps running while completed segments
+are being transcribed and submitted. To only print transcripts without sending
+them to ChatGPT:
 
 ```sh
 python main.py --stream --no-ask-chatgpt
