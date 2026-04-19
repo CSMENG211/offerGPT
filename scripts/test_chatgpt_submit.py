@@ -17,10 +17,11 @@ def main() -> None:
     parser.add_argument(
         "--photo-mode",
         choices=("test", "live"),
-        default=None,
+        default="test",
         help=(
             "Upload a fixed interview photo with the prompt: "
-            "test uses /Users/flora/interview/test.jpg; live uses /Users/flora/interview/live.jpg."
+            "test uses /Users/flora/interview/test.jpg; live uses /Users/flora/interview/live.jpg. "
+            "Default: test."
         ),
     )
     args = parser.parse_args()

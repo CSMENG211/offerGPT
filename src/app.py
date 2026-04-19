@@ -46,7 +46,7 @@ class RuntimeOptions:
 
     ask_chatgpt: bool = True
     enroll_me: bool = False
-    photo_mode: PhotoMode | None = None
+    photo_mode: PhotoMode | None = "test"
 
 
 @dataclass
@@ -253,7 +253,8 @@ def next_photo_upload(
 
     photo_signature = current_photo_signature(photo_path)
     if photo_signature is None:
-        return photo_path, None
+        logger.warning("Photo unavailable at {}; submitting text only.", photo_path)
+        return None, None
 
     if photo_signature == photo_tracker.last_signature:
         logger.info("Photo unchanged since last upload; submitting text only.")
