@@ -228,8 +228,13 @@ Playwright automation for submitting prompts to ChatGPT.
 - `BrowserSession.close()`: Closes resources only when this process owns them.
 - `submit_to_chatgpt(prompt, photo_path, cdp_url)`: Opens ChatGPT, attaches an optional photo, fills the prompt, submits it, and brings Chrome forward on macOS.
 - `connect_to_cdp_browser(playwright, cdp_url)`: Connects to an existing Chrome over CDP.
-- `open_chatgpt_page(context)`: Reuses an existing ChatGPT tab or opens a new one.
-- `activate_chrome()`: Brings Google Chrome to the foreground on macOS.
+- `open_chatgpt_page(context)`: Reuses the dedicated marked SecondVoice ChatGPT tab or opens and marks a new one.
+- `is_secondvoice_chatgpt_page(page)`: Checks whether a ChatGPT tab has the SecondVoice tab marker.
+- `mark_secondvoice_chatgpt_page(page)`: Marks one ChatGPT tab as the dedicated SecondVoice automation tab and adds a visible title prefix plus in-page badge.
+- `activate_chrome()`: Brings the CDP automation Chrome process to the foreground on macOS, with a generic Chrome activation fallback.
+- `automation_chrome_pid()`: Finds the main Chrome process launched with the automation profile and CDP port.
+- `activate_process(pid)`: Activates one macOS process by PID through System Events.
+- `stabilize_chatgpt_theme(page)`: Pins the automation page to the dark color scheme before submission.
 - `fill_prompt(prompt_box, prompt)`: Writes the prompt into the composer.
 - `submit_prompt(page, prompt_box, wait_for_upload)`: Sends the prompt by button click or Enter fallback.
 - `find_send_button(page)`: Tries known ChatGPT send-button selectors.

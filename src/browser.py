@@ -11,6 +11,12 @@ from constants import (
     DEFAULT_CDP_URL,
 )
 
+CHATGPT_COLOR_SCHEME = "dark"
+CDP_BROWSER_PROFILE_MARKER = ".secondvoice/cdp-browser-profile"
+SECONDVOICE_CHATGPT_TAB_NAME = "secondvoice-chatgpt"
+SECONDVOICE_BADGE_ID = "secondvoice-tab-badge"
+SECONDVOICE_TITLE_PREFIX = "SecondVoice"
+
 
 @dataclass
 class BrowserSession:
@@ -44,6 +50,7 @@ def submit_to_chatgpt(
 
         try:
             page = open_chatgpt_page(session.context)
+            stabilize_chatgpt_theme(page)
 
             try:
                 prompt_box = find_prompt_box(page, timeout=5_000)
@@ -98,22 +105,91 @@ def connect_to_cdp_browser(playwright, cdp_url: str) -> BrowserSession:
 
 
 def open_chatgpt_page(context):
-    """Reuse an existing ChatGPT tab or open one when needed."""
+    """Reuse the dedicated SecondVoice ChatGPT tab or open one when needed."""
     for page in context.pages:
-        if page.url.startswith(CHATGPT_URL):
-            logger.info("Reusing existing ChatGPT tab.")
+        if page.url.startswith(CHATGPT_URL) and is_secondvoice_chatgpt_page(page):
+            logger.info("Reusing dedicated SecondVoice ChatGPT tab.")
+            mark_secondvoice_chatgpt_page(page)
             page.bring_to_front()
             activate_chrome()
             return page
 
     page = context.new_page()
     page.goto(CHATGPT_URL, wait_until="domcontentloaded")
+    mark_secondvoice_chatgpt_page(page)
     return page
 
 
+def is_secondvoice_chatgpt_page(page) -> bool:
+    """Return whether a ChatGPT tab belongs to SecondVoice automation."""
+    try:
+        return page.evaluate(
+            """
+            (name) => window.name === name || sessionStorage.getItem(name) === "1"
+            """,
+            SECONDVOICE_CHATGPT_TAB_NAME,
+        )
+    except Exception as exc:
+        logger.debug("Could not inspect ChatGPT tab marker: {}", exc)
+        return False
+
+
+def mark_secondvoice_chatgpt_page(page) -> None:
+    """Mark one ChatGPT tab as the dedicated SecondVoice automation tab."""
+    try:
+        page.evaluate(
+            """
+            ({ name, badgeId, titlePrefix }) => {
+              window.name = name;
+              sessionStorage.setItem(name, "1");
+
+              const updateTitle = () => {
+                if (!document.title.startsWith(`${titlePrefix} - `)) {
+                  document.title = `${titlePrefix} - ${document.title}`;
+                }
+              };
+              updateTitle();
+              window.__secondvoiceTitleTimer ||= window.setInterval(updateTitle, 1000);
+
+              let badge = document.getElementById(badgeId);
+              if (!badge) {
+                badge = document.createElement("div");
+                badge.id = badgeId;
+                badge.textContent = titlePrefix;
+                Object.assign(badge.style, {
+                  position: "fixed",
+                  right: "12px",
+                  bottom: "12px",
+                  zIndex: "2147483647",
+                  padding: "6px 8px",
+                  border: "1px solid rgba(255, 255, 255, 0.22)",
+                  borderRadius: "6px",
+                  background: "rgba(16, 16, 16, 0.86)",
+                  color: "white",
+                  font: "12px system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+                  pointerEvents: "none",
+                });
+                document.body.appendChild(badge);
+              }
+            }
+            """,
+            {
+                "name": SECONDVOICE_CHATGPT_TAB_NAME,
+                "badgeId": SECONDVOICE_BADGE_ID,
+                "titlePrefix": SECONDVOICE_TITLE_PREFIX,
+            },
+        )
+    except Exception as exc:
+        logger.debug("Could not mark SecondVoice ChatGPT tab: {}", exc)
+
+
 def activate_chrome() -> None:
-    """Bring Google Chrome to the foreground on macOS."""
+    """Bring the automation Chrome process to the foreground on macOS."""
     if platform.system() != "Darwin":
+        return
+
+    pid = automation_chrome_pid()
+    if pid is not None and activate_process(pid):
         return
 
     subprocess.run(
@@ -122,6 +198,74 @@ def activate_chrome() -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+
+def automation_chrome_pid() -> int | None:
+    """Return the main Chrome PID for the CDP automation profile."""
+    result = subprocess.run(
+        ["ps", "-axo", "pid=,command="],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+
+    for line in result.stdout.splitlines():
+        if (
+            "/Google Chrome.app/Contents/MacOS/Google Chrome" in line
+            and "--remote-debugging-port=9222" in line
+            and CDP_BROWSER_PROFILE_MARKER in line
+        ):
+            pid_text = line.strip().split(maxsplit=1)[0]
+            try:
+                return int(pid_text)
+            except ValueError:
+                return None
+
+    return None
+
+
+def activate_process(pid: int) -> bool:
+    """Activate one macOS process by PID through System Events."""
+    result = subprocess.run(
+        [
+            "osascript",
+            "-e",
+            (
+                'tell application "System Events" to set frontmost of '
+                f"(first process whose unix id is {pid}) to true"
+            ),
+        ],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0
+
+
+def stabilize_chatgpt_theme(page) -> None:
+    """Keep ChatGPT's visual theme stable during automation."""
+    page.emulate_media(color_scheme=CHATGPT_COLOR_SCHEME)
+    try:
+        page.evaluate(
+            """
+            (theme) => {
+              for (const key of Object.keys(localStorage)) {
+                if (key.startsWith("oai/apps/chatTheme/")) {
+                  localStorage.setItem(key, JSON.stringify(theme));
+                }
+              }
+              document.documentElement.classList.remove("light", "dark");
+              document.documentElement.classList.add(theme);
+              document.documentElement.style.colorScheme = theme;
+            }
+            """,
+            CHATGPT_COLOR_SCHEME,
+        )
+    except Exception as exc:
+        logger.debug("Could not stabilize ChatGPT theme: {}", exc)
 
 
 def fill_prompt(prompt_box, prompt: str) -> None:
