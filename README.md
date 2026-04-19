@@ -6,13 +6,48 @@ It captures audio from your microphone, transcribes it locally with
 faster-whisper, and sends each transcript segment to ChatGPT for role
 classification, context tracking, and answer feedback.
 
-### Setup
+### Install
 
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+python -m playwright install chromium
 ```
+
+Pull the local endpoint detector model:
+
+```sh
+ollama pull qwen2.5:1.5b
+```
+
+### Setup
+
+Before each run, keep Ollama running in a terminal:
+
+```sh
+ollama serve
+```
+
+Start Chrome in CDP mode:
+
+```sh
+open -na 'Google Chrome' --args \
+  --remote-debugging-port=9222 \
+  --user-data-dir=$HOME/.secondvoice/cdp-browser-profile
+```
+
+In that Chrome window, open ChatGPT and log in:
+
+```text
+https://chatgpt.com/
+```
+
+On startup, `python main.py` checks that Ollama is reachable and has
+`qwen2.5:1.5b` installed. When ChatGPT submission is enabled, it also checks
+that Chrome CDP is reachable at `http://127.0.0.1:9222`. If a required service
+is missing, SecondVoice logs the setup command and exits before microphone
+capture starts.
 
 ### Run
 
@@ -39,13 +74,18 @@ python main.py
 ```
 
 Recording starts automatically when speech begins. After 3 seconds of silence,
-SecondVoice checks whether the current segment is semantically complete. The
-semantic detector is currently a placeholder and always waits for more audio,
-so the effective fallback trigger remains 10 seconds of silence. Once a segment
-ends, SecondVoice transcribes that segment, sends it to ChatGPT, and continues
-listening. ChatGPT classifies the segment as interviewer or interviewee.
-Interviewer segments are added to the problem context; interviewee segments get
-an ideal response and evaluation against that ideal.
+SecondVoice draft-transcribes the current audio and asks local Ollama
+`qwen2.5:1.5b` whether the thought is complete. If Ollama returns `COMPLETE`,
+the segment ends early. If it returns `INCOMPLETE`, is unavailable, or returns
+anything unexpected, SecondVoice keeps listening until the 10-second hard
+silence fallback. Once a segment ends, SecondVoice transcribes that segment,
+sends it to ChatGPT, and continues listening. ChatGPT classifies the segment as
+interviewer or interviewee. Interviewer segments are added to the problem
+context; interviewee segments get an ideal response and evaluation against that
+ideal.
+
+The semantic endpoint detector expects Ollama to be running locally with
+`qwen2.5:1.5b` available.
 
 To only print transcripts and interviewee voice confidence without sending them
 to ChatGPT:
@@ -62,6 +102,8 @@ python main.py --no-ask --photo-mode none
 ```
 
 In `none` mode, SecondVoice does not capture photos and does not upload photos.
+The semantic endpoint detector still runs in this mode, so it is useful for
+testing transcription plus endpointing without ChatGPT or photo traffic.
 
 ### Photo Modes
 
@@ -104,29 +146,16 @@ unknown. ChatGPT treats this as a hint alongside the transcript text.
 
 ### Ask ChatGPT
 
-Install Playwright's browser once:
-
-```sh
-python -m playwright install chromium
-```
-
 Then stream, transcribe segments, open ChatGPT, paste each prompt, and submit it:
 
 ```sh
 python main.py
 ```
 
-The first time, ChatGPT may ask you to log in. The browser profile is stored at
+The real stream path connects to an already-running Chrome instance with remote
+debugging enabled. Use the Chrome command in setup, then log in to ChatGPT in
+that window. The browser profile is stored at
 `~/.secondvoice/cdp-browser-profile`, so future runs can reuse that login.
-
-The real stream path connects to an already-running Chrome instance that you
-start with remote debugging:
-
-```sh
-open -na 'Google Chrome' --args \
-  --remote-debugging-port=9222 \
-  --user-data-dir=$HOME/.secondvoice/cdp-browser-profile
-```
 
 Then run:
 

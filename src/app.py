@@ -29,6 +29,7 @@ from constants import (
     TEST_PHOTO_CAPTURE_INTERVAL_SECONDS,
     TEST_INTERVIEW_PHOTO_PATH,
 )
+from endpoint_detector import OllamaSemanticEndpointDetector
 from speaker_id import SpeakerHint, SpeakerIdentifier
 from transcription import LocalTranscriber
 
@@ -104,10 +105,12 @@ def stream_loop(options: RuntimeOptions) -> None:
     with tempfile.TemporaryDirectory(prefix="secondvoice-eval-") as temp_dir:
         segment_queue: queue.Queue[Path | Exception] = queue.Queue()
         stop_event = threading.Event()
+        semantic_endpoint_detector = OllamaSemanticEndpointDetector()
         recorder = start_stream_recorder(
             Path(temp_dir),
             segment_queue,
             stop_event,
+            semantic_endpoint_detector,
         )
         photo_timer = (
             start_photo_timer(stop_event, options.photo_mode)
@@ -117,6 +120,7 @@ def stream_loop(options: RuntimeOptions) -> None:
 
         try:
             transcriber = LocalTranscriber(DEFAULT_TRANSCRIPTION_MODEL)
+            semantic_endpoint_detector.set_transcriber(transcriber)
             speaker_identifier = SpeakerIdentifier()
             photo_tracker = PhotoUploadTracker()
             while True:
@@ -148,6 +152,7 @@ def start_stream_recorder(
     output_dir: Path,
     segment_queue: queue.Queue[Path | Exception],
     stop_event: threading.Event,
+    semantic_endpoint_detector: OllamaSemanticEndpointDetector,
 ) -> threading.Thread:
     """Start the background recorder that feeds completed segments into a queue."""
     recorder = threading.Thread(
@@ -159,17 +164,11 @@ def start_stream_recorder(
             STREAM_HARD_SILENCE_SECONDS,
             DEFAULT_SILENCE_THRESHOLD,
             STREAM_SEMANTIC_SILENCE_SECONDS,
-            stream_segment_is_semantically_complete,
+            semantic_endpoint_detector.is_complete,
         ),
     )
     recorder.start()
     return recorder
-
-
-def stream_segment_is_semantically_complete(audio_path: Path) -> bool:
-    """Return whether a draft stream segment is semantically complete."""
-    logger.debug("Semantic endpoint check disabled for now: {}", audio_path)
-    return False
 
 
 def start_photo_timer(
@@ -393,7 +392,7 @@ def print_stream_mode_banner(options: RuntimeOptions) -> None:
     logger.info("Stream mode is active.")
     logger.info("Audio start trigger: speech begins")
     logger.info(
-        "Semantic endpoint check: {:g}s pause (placeholder currently waits)",
+        "Semantic endpoint check: {:g}s pause via local Ollama qwen2.5:1.5b",
         STREAM_SEMANTIC_SILENCE_SECONDS,
     )
     logger.info("Fallback segment trigger: {:g}s silence", STREAM_HARD_SILENCE_SECONDS)

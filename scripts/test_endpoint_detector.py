@@ -1,33 +1,18 @@
 import argparse
-import json
-import time
 from dataclasses import dataclass
+from pathlib import Path
+import sys
 from urllib.error import URLError
-from urllib.request import Request, urlopen
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
-DEFAULT_MODEL = "qwen2.5:1.5b"
-
-SYSTEM_PROMPT = (
-    "You are an endpoint detector for live coding interview speech. "
-    "Return exactly one word: COMPLETE or INCOMPLETE. "
-    "COMPLETE means the transcript is usable as a standalone segment. "
-    "It may be short. A stated value, action, condition, complexity, "
-    "edge case, or plan step can be COMPLETE. "
-    "INCOMPLETE means the transcript ends mid-phrase, after a connector, "
-    "or clearly expects more words immediately. "
-    "Examples: Transcript: so it is -> INCOMPLETE. "
-    "Transcript: so it is true -> COMPLETE. "
-    "Transcript: return -> INCOMPLETE. "
-    "Transcript: return false -> COMPLETE. "
-    "Transcript: the time complexity is -> INCOMPLETE. "
-    "Transcript: the time complexity is O of n -> COMPLETE. "
-    "Transcript: I would use a hash map because -> INCOMPLETE. "
-    "Transcript: I would use a hash map because lookup is constant time -> COMPLETE. "
-    "Transcript: and then -> INCOMPLETE. "
-    "Transcript: and then I move the left pointer -> COMPLETE."
+from endpoint_detector import (
+    DEFAULT_ENDPOINT_MODEL,
+    OLLAMA_CHAT_URL,
+    classify_endpoint_transcript,
 )
+
+DEFAULT_MODEL = DEFAULT_ENDPOINT_MODEL
 
 
 @dataclass(frozen=True)
@@ -163,37 +148,7 @@ def run_model_benchmark(model: str) -> None:
 
 
 def classify(model: str, transcript: str) -> tuple[str, float]:
-    payload = {
-        "model": model,
-        "stream": False,
-        "keep_alive": "30m",
-        "options": {
-            "temperature": 0,
-            "num_predict": 3,
-        },
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Transcript: {transcript}"},
-        ],
-    }
-    request = Request(
-        OLLAMA_CHAT_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
-    started = time.perf_counter()
-    with urlopen(request, timeout=30) as response:
-        body = json.loads(response.read().decode("utf-8"))
-    duration_ms = (time.perf_counter() - started) * 1000
-
-    content = body["message"]["content"].strip().upper()
-    if "INCOMPLETE" in content:
-        return "INCOMPLETE", duration_ms
-    if "COMPLETE" in content:
-        return "COMPLETE", duration_ms
-    return f"OTHER:{content}", duration_ms
+    return classify_endpoint_transcript(model=model, transcript=transcript)
 
 
 def print_summary(

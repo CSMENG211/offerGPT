@@ -1,4 +1,5 @@
 from pathlib import Path
+import threading
 
 from loguru import logger
 
@@ -16,19 +17,21 @@ class LocalTranscriber:
 
         logger.info("Loading local Whisper model. The first run may download model files...")
         self.model = WhisperModel(model, device="auto", compute_type="auto")
+        self._lock = threading.Lock()
         logger.info("Model loaded.")
 
     def transcribe(self, audio_path: Path) -> str:
         """Transcribe a WAV file and return plain text."""
-        logger.info("Decoding audio...")
-        segments, _ = self.model.transcribe(str(audio_path), beam_size=5)
+        with self._lock:
+            logger.info("Decoding audio...")
+            segments, _ = self.model.transcribe(str(audio_path), beam_size=5)
 
-        transcript_parts = []
-        for segment in segments:
-            text = segment.text.strip()
-            if text:
-                transcript_parts.append(text)
-                logger.info("Partial: {}", text)
+            transcript_parts = []
+            for segment in segments:
+                text = segment.text.strip()
+                if text:
+                    transcript_parts.append(text)
+                    logger.info("Partial: {}", text)
 
-        logger.info("Done decoding audio.")
-        return " ".join(transcript_parts).strip()
+            logger.info("Done decoding audio.")
+            return " ".join(transcript_parts).strip()

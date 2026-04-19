@@ -15,7 +15,7 @@ The application is intentionally small and file-oriented. `main.py` handles comm
 
 ## Non-Goals
 
-- The app does not implement its own LLM backend.
+- The app does not implement its own general-purpose LLM backend. It uses a small local Ollama model only for endpoint completion classification.
 - The app does not store interview transcripts or ChatGPT responses in structured history.
 - The app does not do local speaker diarization. It only provides a similarity hint against one enrolled interviewee profile.
 - The app does not own the ChatGPT UI. Browser automation depends on current ChatGPT selectors and may need maintenance if the UI changes.
@@ -38,7 +38,7 @@ This is the default path.
 4. `start_stream_recorder()` starts a background thread running `audio.stream_utterance_segments()`.
 5. If photo capture is enabled, `start_photo_timer()` starts a second background thread running `capture_photos_on_interval()`.
 6. The main thread loads `LocalTranscriber`, `SpeakerIdentifier`, and `PhotoUploadTracker`.
-7. During recording, the audio loop checks for a semantic endpoint after a 3-second pause. The semantic detector is currently a placeholder that always returns incomplete, so the hard 10-second silence fallback still determines actual segment cuts.
+7. During recording, the audio loop checks for a semantic endpoint after a 3-second pause. The detector draft-transcribes the current audio with the shared local Whisper model, sends that transcript to local Ollama `qwen2.5:1.5b`, and cuts the segment early only when Ollama returns `COMPLETE`. If the detector returns incomplete or fails, the hard 10-second silence fallback still cuts the segment.
 8. For every queued WAV segment, `process_stream_segment()`:
    - Builds a speaker hint from the WAV file.
    - Transcribes the WAV file locally.
@@ -166,7 +166,6 @@ The orchestration layer. It owns high-level runtime paths, threading, prompt con
 - `enroll_interviewee_voice()`: Records prompted enrollment clips and persists a voice profile.
 - `stream_loop(options)`: Runs the continuous capture/transcribe/submit loop.
 - `start_stream_recorder(output_dir, segment_queue, stop_event)`: Starts audio recording in a background thread.
-- `stream_segment_is_semantically_complete(audio_path)`: Placeholder semantic endpoint detector; currently always returns `False`.
 - `start_photo_timer(stop_event, photo_mode)`: Starts periodic photo capture in a background thread.
 - `photo_capture_settings(photo_mode)`: Maps `test` and `live` modes to path, initial delay, and interval.
 - `capture_photos_on_interval(stop_event, photo_path, initial_seconds, interval_seconds)`: Captures photos until stopped.
@@ -199,12 +198,21 @@ Microphone capture and WAV writing.
 - `chunk_is_speech(chunk, threshold)`: Uses RMS amplitude to classify a chunk as speech or silence.
 - `rms_level(chunk)`: Computes RMS amplitude for int16 audio samples.
 
+### `src/endpoint_detector.py`
+
+Local semantic endpointing through Ollama.
+
+- `OllamaSemanticEndpointDetector`: Holds the configured Ollama model name and a shared `LocalTranscriber`. Until the transcriber is attached, checks conservatively return incomplete.
+- `OllamaSemanticEndpointDetector.set_transcriber(transcriber)`: Attaches the loaded Whisper transcriber after app startup.
+- `OllamaSemanticEndpointDetector.is_complete(audio_path)`: Transcribes a draft WAV snapshot, classifies the transcript through Ollama, logs the result, and returns `True` only for `COMPLETE`.
+- `classify_endpoint_transcript(transcript, model, url, timeout_seconds)`: Sends the shared endpoint prompt to the Ollama chat API and returns the normalized label plus latency.
+
 ### `src/transcription.py`
 
 Local Whisper transcription.
 
 - `LocalTranscriber.__init__(model)`: Loads a `faster-whisper` `WhisperModel`.
-- `LocalTranscriber.transcribe(audio_path)`: Transcribes a WAV file, logs partial segments, and returns joined plain text.
+- `LocalTranscriber.transcribe(audio_path)`: Transcribes a WAV file, logs partial segments, and returns joined plain text. Calls are serialized because the stream processor and semantic endpoint detector share one model instance.
 
 ### `src/speaker_id.py`
 
@@ -283,13 +291,24 @@ Manual browser-submission harness.
 - `open_automation_chrome()`: On macOS, opens Google Chrome with remote debugging and the `~/.secondvoice/cdp-browser-profile` profile only when CDP is not already reachable.
 - `cdp_browser_is_running()`: Checks whether the Chrome CDP endpoint is already reachable before launching a browser.
 
+### `scripts/test_endpoint_detector.py`
+
+Ollama semantic-endpoint benchmark harness.
+
+- `main()`: Runs the fixed endpoint-completion case set against one or more Ollama models.
+- `prompt_for_models()`: Asks for model names when none are provided on the command line.
+- `run_model_benchmark(model)`: Prints per-case predictions and summary latency/error counts.
+- `classify(model, transcript)`: Calls the shared `endpoint_detector.classify_endpoint_transcript()` helper so benchmarks and runtime use the same prompt and Ollama request shape.
+
 ## Threading Model
 
 Stream mode uses the main thread for transcription, voice matching, prompt construction, and browser submission. Audio capture runs in a background thread so recording can continue while segments are processed. Photo capture can run in a second background thread for `test` and `live` modes.
 
 Communication between the recorder and main thread is via `queue.Queue[Path | Exception]`. Completed segments are queued as `Path` objects. Recorder failures are queued as exceptions and re-raised by `next_stream_segment()`.
 
-Endpointing is hybrid. The recorder checks a semantic endpoint detector after `STREAM_SEMANTIC_SILENCE_SECONDS`, currently 3 seconds. That detector is intentionally stubbed to always return incomplete for now. If no semantic endpoint is accepted, the recorder falls back to `STREAM_HARD_SILENCE_SECONDS`, currently 10 seconds, and cuts the segment.
+Endpointing is hybrid. The recorder checks a semantic endpoint detector after `STREAM_SEMANTIC_SILENCE_SECONDS`, currently 3 seconds. It writes a draft WAV snapshot of the current segment, transcribes that draft locally, and asks Ollama `qwen2.5:1.5b` whether the transcript is `COMPLETE` or `INCOMPLETE` using the same prompt benchmarked by `scripts/test_endpoint_detector.py`.
+
+The detector is intentionally conservative at the integration boundary: if the transcriber is not loaded yet, Ollama is not reachable, the draft transcript is empty, or the model returns anything other than `COMPLETE`, the recorder keeps listening. If no semantic endpoint is accepted, the recorder falls back to `STREAM_HARD_SILENCE_SECONDS`, currently 10 seconds, and cuts the segment.
 
 Shutdown is coordinated with a shared `threading.Event`. `KeyboardInterrupt` sets the event, joins background threads, and logs completion.
 
