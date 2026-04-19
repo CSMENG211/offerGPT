@@ -32,8 +32,3 @@ class LocalTranscriber:
 
         logger.info("Done decoding audio.")
         return " ".join(transcript_parts).strip()
-
-
-def transcribe(audio_path: Path, model: str = DEFAULT_MODEL) -> str:
-    """Transcribe one audio file with a short-lived local model instance."""
-    return LocalTranscriber(model).transcribe(audio_path)

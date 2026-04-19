@@ -1,10 +1,10 @@
 ## SecondVoice
 
-SecondVoice is a voice-triggered GPT answer assistant for concise read-aloud
-responses.
+SecondVoice is a voice-triggered mock interview evaluator.
 
-This first step captures audio from your microphone and transcribes it locally
-with faster-whisper.
+It captures audio from your microphone, transcribes it locally with
+faster-whisper, and sends each transcript segment to ChatGPT for role
+classification, context tracking, and answer feedback.
 
 ### Setup
 
@@ -20,57 +20,27 @@ pip install -r requirements.txt
 python main.py
 ```
 
-By default, SecondVoice listens continuously and submits triggered prompts to
+By default, SecondVoice streams continuously and submits transcript segments to
 ChatGPT.
 
 Logs are written to `python.log` in the current working directory.
 
-### Listen Loop
+### Stream Mode
 
-Continuously listen for mock-interview questions, then stop the utterance after
-silence:
+Continuously record mock-interview segments, transcribe each segment, and submit
+it to ChatGPT:
 
 ```sh
 python main.py
 ```
 
-By default, listen mode catches explicit question-start phrases and transcripts
-that end in a question mark, like:
+Recording starts automatically when speech begins. After 5 seconds of silence,
+SecondVoice transcribes that segment, sends it to ChatGPT, and continues
+listening. ChatGPT classifies the segment as interviewer or interviewee.
+Interviewer segments are added to the problem context; interviewee segments get
+an ideal response and evaluation against that ideal.
 
-```text
-How would you debug this?
-```
-
-The listen loop uses three trigger layers:
-
-```text
-Audio start trigger: speech begins
-Audio stop trigger: silence lasts N seconds
-Question trigger: question mark detected, or explicit start phrase
-```
-
-Question start phrases, silence timing, and the local transcription model live
-in `src/constants.py`.
-
-Choose a preset:
-
-```sh
-python main.py --batch
-python main.py --generic
-python main.py --stream
-```
-
-`batch` uses batch capture with concise interview-help answers after a
-question-triggered utterance is complete. `generic` uses the same batch capture
-flow with a neutral workplace-answer prompt. `stream` listens continuously for
-mock-interview segments and asks ChatGPT to classify each segment as interviewer
-or interviewee before deciding whether to update problem context or evaluate an
-answer.
-
-The selected mode prompt is prepended only to the first question sent to ChatGPT
-in each run.
-
-To transcribe triggered prompts without sending them to ChatGPT:
+To only print transcripts without sending them to ChatGPT:
 
 ```sh
 python main.py --no-ask-chatgpt
@@ -84,8 +54,7 @@ Install Playwright's browser once:
 python -m playwright install chromium
 ```
 
-Then listen, transcribe triggered prompts, open ChatGPT, paste each prompt, and
-submit it:
+Then stream, transcribe segments, open ChatGPT, paste each prompt, and submit it:
 
 ```sh
 python main.py
@@ -115,37 +84,6 @@ Then run:
 
 ```sh
 python main.py --browser-mode cdp
-```
-
-### One-Shot Recording
-
-To record one utterance manually instead of listening continuously:
-
-```sh
-python main.py --no-listen
-```
-
-### Stream Mode
-
-To continuously record mock-interview segments, transcribe each segment, and
-submit it to ChatGPT for role classification, context tracking, and answer
-feedback:
-
-```sh
-python main.py --stream
-```
-
-This mode does not use local question detection. Recording starts automatically
-when speech begins. After 5 seconds of silence, SecondVoice transcribes that
-segment, sends it to ChatGPT, and continues listening. ChatGPT classifies the
-segment as interviewer or interviewee. Interviewer segments are added to the
-problem context; interviewee segments get an ideal response and evaluation
-against that ideal. The microphone stream keeps running while completed segments
-are being transcribed and submitted. To only print transcripts without sending
-them to ChatGPT:
-
-```sh
-python main.py --stream --no-ask-chatgpt
 ```
 
 On macOS, your terminal may ask for microphone permission the first time this
