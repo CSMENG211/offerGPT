@@ -10,7 +10,7 @@ The application is intentionally small and file-oriented. `main.py` handles comm
 - Keep transcription local through `faster-whisper`.
 - Preserve interviewer context across ChatGPT submissions by sending an initial mode prompt and then incremental transcript segments.
 - Help ChatGPT distinguish interviewer and interviewee speech with an optional enrolled voice hint.
-- Add visual problem-board context through a static, test, or live camera photo.
+- Add visual problem-board context through test or live camera photos when enabled.
 - Reuse a logged-in ChatGPT browser session through Chrome DevTools Protocol.
 
 ## Non-Goals
@@ -81,15 +81,15 @@ Streaming mode can then include a confidence value showing how similar each segm
 
 ### 4. Photo Context Paths
 
-The `--photo-mode` flag controls which image path is considered for ChatGPT upload.
+The `--photo-mode` flag controls whether the main app captures and uploads photos.
 
 ```sh
-python main.py --photo-mode static
+python main.py --photo-mode none
 python main.py --photo-mode test
 python main.py --photo-mode live
 ```
 
-- `static`: uses `/Users/flora/interview/static.jpg`; the app never captures it.
+- `none`: disables all photo capture and upload. This is the default and is useful with `--no-ask` for transcription-only testing.
 - `test`: captures `/Users/flora/interview/test.jpg` after 60 seconds and then every 60 seconds.
 - `live`: captures `/Users/flora/interview/live.jpg` after 10 minutes and then every 10 minutes.
 
@@ -100,10 +100,10 @@ python main.py --photo-mode live
 Command:
 
 ```sh
-python scripts/test_chatgpt_submit.py --photo-mode static
+python scripts/test_chatgpt_submit.py
 ```
 
-This script reads a transcript segment from stdin or an interactive prompt, builds a stream prompt, and submits it to ChatGPT. It bypasses microphone recording and local transcription, so it is useful for testing browser automation and photo upload behavior.
+This script opens the automation Chrome profile on macOS, builds a stream prompt from a fixed two-sum-style transcript, and submits it to ChatGPT. It bypasses microphone recording, local transcription, and interactive transcript entry, so it is useful for testing browser automation and fixed photo upload behavior. It does not accept a photo mode; it always attaches `/Users/flora/interview/static.jpg`.
 
 ### 6. Standalone Camera Capture
 
@@ -153,7 +153,7 @@ Current CLI flags:
 
 - `--no-ask`: Turns off ChatGPT submission while keeping capture and transcription active.
 - `--enroll`: Runs voice enrollment instead of stream mode.
-- `--photo-mode`: Selects `static`, `test`, or `live` photo behavior.
+- `--photo-mode`: Selects `none`, `test`, or `live` photo behavior.
 
 ### `src/app.py`
 
@@ -166,14 +166,13 @@ The orchestration layer. It owns high-level runtime paths, threading, prompt con
 - `stream_loop(options)`: Runs the continuous capture/transcribe/submit loop.
 - `start_stream_recorder(output_dir, segment_queue, stop_event)`: Starts audio recording in a background thread.
 - `start_photo_timer(stop_event, photo_mode)`: Starts periodic photo capture in a background thread.
-- `photo_capture_enabled(photo_mode)`: Returns whether the selected mode should actively capture photos.
 - `photo_capture_settings(photo_mode)`: Maps `test` and `live` modes to path, initial delay, and interval.
 - `capture_photos_on_interval(stop_event, photo_path, initial_seconds, interval_seconds)`: Captures photos until stopped.
 - `next_stream_segment(segment_queue)`: Polls the recorder queue and raises recorder exceptions on the main thread.
 - `process_stream_segment(...)`: Handles one completed WAV segment end to end.
 - `next_photo_upload(photo_mode, photo_tracker)`: Selects a photo only if it is available and changed.
 - `current_photo_signature(photo_path)`: Returns `(mtime_ns, size)` for a valid photo file.
-- `interview_photo_path(photo_mode)`: Maps a mode to its fixed photo path.
+- `interview_photo_path(photo_mode)`: Maps `test` and `live` modes to their fixed photo paths; `none` returns no path.
 - `build_speaker_hint(audio_path, speaker_identifier)`: Produces a `SpeakerHint`, falling back to `unknown` if voice matching fails.
 - `build_stream_prompt(...)`: Builds the prompt sent to ChatGPT.
 - `speaker_hint_value(speaker_hint)`: Formats confidence for the prompt.
@@ -271,8 +270,9 @@ Loguru setup.
 
 Manual browser-submission harness.
 
-- `main()`: Reads a transcript segment, builds a prompt, and submits it to ChatGPT with an optional photo.
-- `read_prompt()`: Reads from stdin when piped, otherwise prompts interactively.
+- `SMOKE_TEST_TRANSCRIPT`: Fixed two-sum-style transcript used for browser smoke testing.
+- `main()`: Opens the automation browser, builds a prompt from `SMOKE_TEST_TRANSCRIPT`, and submits it to ChatGPT with `/Users/flora/interview/static.jpg`.
+- `open_automation_chrome()`: On macOS, opens Google Chrome with remote debugging and the `~/.secondvoice/cdp-browser-profile` profile.
 
 ## Threading Model
 
@@ -300,7 +300,8 @@ Persistent state:
 - `~/.secondvoice/interviewee-voice-embedding.pt`: enrolled interviewee embedding.
 - `~/.secondvoice/interviewee-voice-profile.json`: metadata for the enrolled voice profile.
 - `~/.secondvoice/cdp-browser-profile`: recommended Chrome profile for reusable ChatGPT login.
-- `/Users/flora/interview/static.jpg`, `test.jpg`, `live.jpg`: photo-context inputs.
+- `/Users/flora/interview/test.jpg`, `live.jpg`: main app photo-context inputs.
+- `/Users/flora/interview/static.jpg`: fixed photo fixture for `scripts/test_chatgpt_submit.py`.
 
 Temporary state:
 

@@ -6,8 +6,6 @@ This module can be imported and used from other code, or run directly:
     python src/camera.py
 """
 
-from __future__ import annotations
-
 import argparse
 import shutil
 import subprocess

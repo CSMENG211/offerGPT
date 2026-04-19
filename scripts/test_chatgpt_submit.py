@@ -1,50 +1,60 @@
-import argparse
+import platform
+import subprocess
 import sys
 from pathlib import Path
+from time import sleep
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from app import build_stream_prompt, interview_photo_path
+from app import build_stream_prompt
 from browser import submit_to_chatgpt
+from constants import STATIC_INTERVIEW_PHOTO_PATH
 from logging_config import configure_logging
 
 
-def main() -> None:
-    """Read a transcript segment and submit it to ChatGPT through browser automation."""
-    configure_logging()
-    parser = argparse.ArgumentParser(description="Submit a stdin transcript segment to ChatGPT.")
-    parser.add_argument(
-        "--photo-mode",
-        choices=("static", "test", "live"),
-        default="static",
-        help=(
-            "Upload a fixed interview photo with the prompt: "
-            "static uses /Users/flora/interview/static.jpg; "
-            "test uses /Users/flora/interview/test.jpg; "
-            "live uses /Users/flora/interview/live.jpg. Default: static."
-        ),
-    )
-    args = parser.parse_args()
+CDP_BROWSER_PROFILE_DIR = Path.home() / ".secondvoice" / "cdp-browser-profile"
 
-    prompt = read_prompt()
-    photo_path = interview_photo_path(args.photo_mode)
+SMOKE_TEST_TRANSCRIPT = (
+    "Given an array of integers and a target value, return whether there is a "
+    "pair of integers in the array that sums to the target."
+)
+
+
+def main() -> None:
+    """Submit a fixed transcript segment to ChatGPT through browser automation."""
+    configure_logging()
+    open_automation_chrome()
     submit_to_chatgpt(
         build_stream_prompt(
-            prompt,
+            SMOKE_TEST_TRANSCRIPT,
             include_mode_prompt=True,
-            include_photo_context=photo_path is not None,
+            include_photo_context=True,
         ),
-        photo_path=photo_path,
+        photo_path=STATIC_INTERVIEW_PHOTO_PATH,
     )
 
 
-def read_prompt() -> str:
-    """Read a prompt from stdin or interactively from the terminal."""
-    if not sys.stdin.isatty():
-        return sys.stdin.read().strip()
+def open_automation_chrome() -> None:
+    """Open the Chrome profile that Playwright connects to over CDP."""
+    if platform.system() != "Darwin":
+        return
 
-    return input("Enter the transcript segment to send to ChatGPT:\n> ").strip()
+    CDP_BROWSER_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "open",
+            "-na",
+            "Google Chrome",
+            "--args",
+            "--remote-debugging-port=9222",
+            f"--user-data-dir={CDP_BROWSER_PROFILE_DIR}",
+        ],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    sleep(2)
 
 
 if __name__ == "__main__":

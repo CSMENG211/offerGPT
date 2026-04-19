@@ -33,13 +33,13 @@ def parse_args() -> RuntimeOptions:
     )
     parser.add_argument(
         "--photo-mode",
-        choices=("static", "test", "live"),
-        default="static",
+        choices=("none", "test", "live"),
+        default="none",
         help=(
-            "Upload a fixed interview photo with each ChatGPT prompt: "
-            "static uses /Users/flora/interview/static.jpg without capture; "
+            "Control interview photo capture and upload: "
+            "none disables all photo capture and upload; "
             "test captures to /Users/flora/interview/test.jpg; "
-            "live captures to /Users/flora/interview/live.jpg. Default: static."
+            "live captures to /Users/flora/interview/live.jpg. Default: none."
         ),
     )
     args = parser.parse_args()

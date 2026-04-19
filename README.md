@@ -25,6 +25,10 @@ ChatGPT.
 
 Logs are written to `python.log` in the current working directory.
 
+Photo capture and upload are disabled by default. Use `--photo-mode test` or
+`--photo-mode live` when you want SecondVoice to capture and attach interview
+photos.
+
 ### Stream Mode
 
 Continuously record mock-interview segments, transcribe each segment, and submit
@@ -45,6 +49,35 @@ to ChatGPT:
 
 ```sh
 python main.py --no-ask
+```
+
+For transcription-only isolation, keep the default photo mode or pass it
+explicitly:
+
+```sh
+python main.py --no-ask --photo-mode none
+```
+
+In `none` mode, SecondVoice does not capture photos and does not upload photos.
+
+### Photo Modes
+
+```sh
+python main.py --photo-mode none
+python main.py --photo-mode test
+python main.py --photo-mode live
+```
+
+- `none`: disables all photo capture and upload. This is the default.
+- `test`: captures `/Users/flora/interview/test.jpg` after 60 seconds and then every 60 seconds.
+- `live`: captures `/Users/flora/interview/live.jpg` after 10 minutes and then every 10 minutes.
+
+The browser smoke test always submits a fixed two-sum-style prompt and attaches
+`/Users/flora/interview/static.jpg`. On macOS it opens the automation Chrome
+profile first, then runs the ChatGPT browser automation:
+
+```sh
+python scripts/test_chatgpt_submit.py
 ```
 
 ### Voice Enrollment

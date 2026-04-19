@@ -22,7 +22,6 @@ from constants import (
     SPEAKER_ENROLLMENT_SILENCE_SECONDS,
     SPEAKER_PROFILE_EMBEDDING_PATH,
     SPEAKER_PROFILE_METADATA_PATH,
-    STATIC_INTERVIEW_PHOTO_PATH,
     STREAM_PROMPT,
     STREAM_SILENCE_SECONDS,
     TEST_PHOTO_CAPTURE_INITIAL_SECONDS,
@@ -32,7 +31,7 @@ from constants import (
 from speaker_id import SpeakerHint, SpeakerIdentifier
 from transcription import LocalTranscriber
 
-PhotoMode = Literal["static", "test", "live"]
+PhotoMode = Literal["none", "test", "live"]
 PhotoSignature = tuple[int, int]
 
 
@@ -49,7 +48,7 @@ class RuntimeOptions:
 
     ask_chatgpt: bool = True
     enroll_me: bool = False
-    photo_mode: PhotoMode | None = "static"
+    photo_mode: PhotoMode = "none"
 
 
 @dataclass
@@ -111,7 +110,7 @@ def stream_loop(options: RuntimeOptions) -> None:
         )
         photo_timer = (
             start_photo_timer(stop_event, options.photo_mode)
-            if photo_capture_enabled(options.photo_mode)
+            if options.photo_mode != "none"
             else None
         )
 
@@ -183,11 +182,6 @@ def start_photo_timer(
     return photo_timer
 
 
-def photo_capture_enabled(photo_mode: PhotoMode | None) -> bool:
-    """Return whether the selected photo mode should capture camera photos."""
-    return photo_mode in ("test", "live")
-
-
 def photo_capture_settings(photo_mode: PhotoMode) -> tuple[Path, float, float]:
     """Return the capture target, initial delay, and interval for a photo mode."""
     if photo_mode == "test":
@@ -197,11 +191,14 @@ def photo_capture_settings(photo_mode: PhotoMode) -> tuple[Path, float, float]:
             TEST_PHOTO_CAPTURE_INTERVAL_SECONDS,
         )
 
-    return (
-        LIVE_INTERVIEW_PHOTO_PATH,
-        LIVE_PHOTO_CAPTURE_INITIAL_SECONDS,
-        LIVE_PHOTO_CAPTURE_INTERVAL_SECONDS,
-    )
+    if photo_mode == "live":
+        return (
+            LIVE_INTERVIEW_PHOTO_PATH,
+            LIVE_PHOTO_CAPTURE_INITIAL_SECONDS,
+            LIVE_PHOTO_CAPTURE_INTERVAL_SECONDS,
+        )
+
+    raise ValueError(f"Photo mode {photo_mode!r} does not capture photos.")
 
 
 def capture_photos_on_interval(
@@ -277,7 +274,7 @@ def process_stream_segment(
 
 
 def next_photo_upload(
-    photo_mode: PhotoMode | None,
+    photo_mode: PhotoMode,
     photo_tracker: PhotoUploadTracker,
 ) -> tuple[Path | None, PhotoSignature | None]:
     """Return a photo path only when the selected image changed since upload."""
@@ -310,10 +307,8 @@ def current_photo_signature(photo_path: Path) -> PhotoSignature | None:
     return stat.st_mtime_ns, stat.st_size
 
 
-def interview_photo_path(photo_mode: PhotoMode | None) -> Path | None:
+def interview_photo_path(photo_mode: PhotoMode) -> Path | None:
     """Return the fixed photo path for the selected photo mode."""
-    if photo_mode == "static":
-        return STATIC_INTERVIEW_PHOTO_PATH
     if photo_mode == "test":
         return TEST_INTERVIEW_PHOTO_PATH
     if photo_mode == "live":
@@ -389,23 +384,21 @@ def print_stream_mode_banner(options: RuntimeOptions) -> None:
     logger.info("Stream mode is active.")
     logger.info("Audio start trigger: speech begins")
     logger.info("Segment trigger: {:g}s of silence", STREAM_SILENCE_SECONDS)
-    if options.photo_mode is not None:
+    if options.photo_mode != "none":
         logger.info(
             "Photo upload: {} mode; using {}",
             options.photo_mode,
             interview_photo_path(options.photo_mode),
         )
-        if photo_capture_enabled(options.photo_mode):
-            _, initial_seconds, interval_seconds = photo_capture_settings(options.photo_mode)
-            logger.info(
-                "Photo capture: first after {:g} min; then every {:g} min",
-                initial_seconds / 60,
-                interval_seconds / 60,
-            )
-        else:
-            logger.info("Photo capture: disabled in static mode")
+        _, initial_seconds, interval_seconds = photo_capture_settings(options.photo_mode)
+        logger.info(
+            "Photo capture: first after {:g} min; then every {:g} min",
+            initial_seconds / 60,
+            interval_seconds / 60,
+        )
     else:
         logger.info("Photo upload: disabled")
+        logger.info("Photo capture: disabled")
     logger.info("Recording continues while segments are transcribed")
     if options.ask_chatgpt:
         logger.info("ChatGPT submission: enabled")
