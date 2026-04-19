@@ -27,27 +27,24 @@ def parse_args() -> RuntimeOptions:
         help="Transcribe without submitting the prompt to ChatGPT.",
     )
     parser.add_argument(
-        "--browser",
-        choices=("persistent", "cdp"),
-        default="cdp",
-        help="Browser automation mode for ChatGPT submission. Default: cdp",
-    )
-    parser.add_argument(
         "--enroll",
         action="store_true",
         help="Record prompted interviewee voice samples and save the voice profile.",
     )
     parser.add_argument(
-        "--upload-photo",
-        action="store_true",
-        help="Upload the latest photo from /Users/flora/interview/ with each ChatGPT prompt.",
+        "--photo-mode",
+        choices=("test", "live"),
+        default=None,
+        help=(
+            "Upload a fixed interview photo with each ChatGPT prompt: "
+            "test uses /Users/flora/interview/test.jpg; live uses /Users/flora/interview/live.jpg."
+        ),
     )
     args = parser.parse_args()
     return RuntimeOptions(
         ask_chatgpt=args.ask_chatgpt,
-        browser_mode=args.browser,
         enroll_me=args.enroll,
-        upload_photo=args.upload_photo,
+        photo_mode=args.photo_mode,
     )
 
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from app import build_stream_prompt, latest_interview_photo
+from app import build_stream_prompt, interview_photo_path
 from browser import submit_to_chatgpt
 from logging_config import configure_logging
 
@@ -15,20 +15,18 @@ def main() -> None:
     configure_logging()
     parser = argparse.ArgumentParser(description="Submit a stdin transcript segment to ChatGPT.")
     parser.add_argument(
-        "--browser",
-        choices=("persistent", "cdp"),
-        default="cdp",
-        help="Browser automation mode. Default: cdp",
-    )
-    parser.add_argument(
-        "--upload-photo",
-        action="store_true",
-        help="Upload the latest photo from /Users/flora/interview/ with the prompt.",
+        "--photo-mode",
+        choices=("test", "live"),
+        default=None,
+        help=(
+            "Upload a fixed interview photo with the prompt: "
+            "test uses /Users/flora/interview/test.jpg; live uses /Users/flora/interview/live.jpg."
+        ),
     )
     args = parser.parse_args()
 
     prompt = read_prompt()
-    photo_path = latest_interview_photo() if args.upload_photo else None
+    photo_path = interview_photo_path(args.photo_mode)
     submit_to_chatgpt(
         build_stream_prompt(
             prompt,
@@ -36,7 +34,6 @@ def main() -> None:
             include_photo_context=photo_path is not None,
         ),
         photo_path=photo_path,
-        browser_mode=args.browser,
     )
 
 

@@ -3,18 +3,13 @@ from pathlib import Path
 import platform
 import subprocess
 from time import sleep
-from typing import Literal
 
 from loguru import logger
 
 from constants import (
     CHATGPT_URL,
-    DEFAULT_BROWSER_PROFILE,
     DEFAULT_CDP_URL,
-    PERSISTENT_TYPE_DELAY_MS,
 )
-
-BrowserMode = Literal["persistent", "cdp"]
 
 
 @dataclass
@@ -34,28 +29,24 @@ class BrowserSession:
 def submit_to_chatgpt(
     prompt: str,
     photo_path: Path | None = None,
-    profile_dir: Path = DEFAULT_BROWSER_PROFILE,
-    browser_mode: BrowserMode = "cdp",
     cdp_url: str = DEFAULT_CDP_URL,
-) -> None:
+) -> bool:
     """Open ChatGPT, place the prompt into the composer, and submit it."""
     if not prompt.strip():
         logger.info("Skipping ChatGPT submission because the transcript is empty.")
-        return
+        return False
 
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright
 
-    profile_dir.mkdir(parents=True, exist_ok=True)
-
     with sync_playwright() as playwright:
-        session = open_browser_session(playwright, profile_dir, browser_mode, cdp_url)
+        session = connect_to_cdp_browser(playwright, cdp_url)
 
         try:
-            page = open_chatgpt_page(session.context, browser_mode)
+            page = open_chatgpt_page(session.context)
 
             try:
-                prompt_box = find_prompt_box(page, timeout=prompt_box_timeout(browser_mode))
+                prompt_box = find_prompt_box(page, timeout=5_000)
             except PlaywrightTimeoutError:
                 logger.warning("Could not find the ChatGPT prompt box yet.")
                 logger.warning("If ChatGPT is asking you to log in, finish logging in inside the browser.")
@@ -67,59 +58,19 @@ def submit_to_chatgpt(
             if has_photo:
                 if not attach_file(page, photo_path):
                     logger.error("Skipping ChatGPT submission because the photo could not be attached.")
-                    return
+                    return False
 
-            fill_prompt(prompt_box, prompt, browser_mode)
+            fill_prompt(prompt_box, prompt)
             submit_prompt(page, prompt_box, wait_for_upload=has_photo)
             logger.info("Submitted transcript to ChatGPT.")
-            if browser_mode == "cdp":
-                activate_chrome()
-            if session.close_browser:
-                input("Browser is open. Press ENTER here when you are ready to close it.")
+            activate_chrome()
+            return True
         except PlaywrightTimeoutError as exc:
             logger.error("Could not find the ChatGPT prompt box.")
             logger.error("If this is the first run, log in to ChatGPT in the opened browser, then run again.")
             raise SystemExit(1) from exc
         finally:
             session.close()
-
-
-def open_browser_session(
-    playwright,
-    profile_dir: Path,
-    browser_mode: BrowserMode,
-    cdp_url: str,
-) -> BrowserSession:
-    """Open a browser context using the selected automation mode."""
-    if browser_mode == "cdp":
-        return connect_to_cdp_browser(playwright, cdp_url)
-    return launch_persistent_browser(playwright, profile_dir)
-
-
-def launch_persistent_browser(playwright, profile_dir: Path) -> BrowserSession:
-    """Launch a visible Chromium browser with a reusable profile directory."""
-    launch_options = {
-        "user_data_dir": str(profile_dir),
-        "headless": False,
-        "no_viewport": True,
-        "args": [
-            "--start-maximized",
-            "--disable-blink-features=AutomationControlled",
-        ],
-    }
-
-    try:
-        logger.info("Opening ChatGPT with installed Google Chrome...")
-        context = playwright.chromium.launch_persistent_context(
-            channel="chrome",
-            **launch_options,
-        )
-    except Exception as exc:
-        logger.warning("Could not launch installed Chrome: {}", exc)
-        logger.info("Falling back to Playwright Chromium...")
-        context = playwright.chromium.launch_persistent_context(**launch_options)
-
-    return BrowserSession(context=context, close_browser=True)
 
 
 def connect_to_cdp_browser(playwright, cdp_url: str) -> BrowserSession:
@@ -146,23 +97,17 @@ def connect_to_cdp_browser(playwright, cdp_url: str) -> BrowserSession:
     return BrowserSession(context=context, close_browser=False, browser=browser)
 
 
-def open_chatgpt_page(context, browser_mode: BrowserMode):
+def open_chatgpt_page(context):
     """Reuse an existing ChatGPT tab or open one when needed."""
     for page in context.pages:
         if page.url.startswith(CHATGPT_URL):
             logger.info("Reusing existing ChatGPT tab.")
             page.bring_to_front()
-            if browser_mode == "cdp":
-                activate_chrome()
+            activate_chrome()
             return page
 
     page = context.new_page()
     page.goto(CHATGPT_URL, wait_until="domcontentloaded")
-
-    if browser_mode == "cdp":
-        return page
-
-    page.wait_for_load_state("networkidle", timeout=30_000)
     return page
 
 
@@ -179,24 +124,10 @@ def activate_chrome() -> None:
     )
 
 
-def prompt_box_timeout(browser_mode: BrowserMode) -> int:
-    """Return how long to wait for ChatGPT's prompt box in each browser mode."""
-    if browser_mode == "cdp":
-        return 5_000
-    return 15_000
-
-
-def fill_prompt(prompt_box, prompt: str, browser_mode: BrowserMode) -> None:
+def fill_prompt(prompt_box, prompt: str) -> None:
     """Fill the prompt box without submitting the message."""
-    if browser_mode == "cdp":
-        prompt_box.click()
-        prompt_box.fill(prompt)
-        return
-
     prompt_box.click()
-    sleep(0.5)
-    prompt_box.press_sequentially(prompt, delay=PERSISTENT_TYPE_DELAY_MS)
-    sleep(0.5)
+    prompt_box.fill(prompt)
 
 
 def submit_prompt(page, prompt_box, wait_for_upload: bool = False) -> None:

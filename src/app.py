@@ -4,18 +4,19 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from loguru import logger
 
 from audio import capture_enrollment_utterance, stream_utterance_segments
-from browser import BrowserMode, submit_to_chatgpt
-from camera_photo import CameraCaptureError, take_photo
+from browser import submit_to_chatgpt
+from camera import CameraCaptureError, take_photo
 from constants import (
     DEFAULT_SILENCE_THRESHOLD,
     DEFAULT_TRANSCRIPTION_MODEL,
-    INTERVIEW_PHOTO_DIR,
-    INTERVIEW_PHOTO_EXTENSIONS,
-    PHOTO_CAPTURE_INTERVAL_SECONDS,
+    LIVE_PHOTO_CAPTURE_INITIAL_SECONDS,
+    LIVE_PHOTO_CAPTURE_INTERVAL_SECONDS,
+    LIVE_INTERVIEW_PHOTO_PATH,
     SPEAKER_ENROLLMENT_MAX_SECONDS,
     SPEAKER_ENROLLMENT_PROMPTS,
     SPEAKER_ENROLLMENT_SILENCE_SECONDS,
@@ -23,9 +24,13 @@ from constants import (
     SPEAKER_PROFILE_METADATA_PATH,
     STREAM_PROMPT,
     STREAM_SILENCE_SECONDS,
+    TEST_INTERVIEW_PHOTO_PATH,
 )
 from speaker_id import SpeakerHint, SpeakerIdentifier
 from transcription import LocalTranscriber
+
+PhotoMode = Literal["test", "live"]
+PhotoSignature = tuple[int, int]
 
 
 PHOTO_CONTEXT_PROMPT = (
@@ -40,9 +45,15 @@ class RuntimeOptions:
     """Options selected by the command-line interface."""
 
     ask_chatgpt: bool = True
-    browser_mode: BrowserMode = "cdp"
     enroll_me: bool = False
-    upload_photo: bool = False
+    photo_mode: PhotoMode | None = None
+
+
+@dataclass
+class PhotoUploadTracker:
+    """Track the last photo file version successfully submitted."""
+
+    last_signature: PhotoSignature | None = None
 
 
 def run(options: RuntimeOptions) -> None:
@@ -95,11 +106,12 @@ def stream_loop(options: RuntimeOptions) -> None:
             segment_queue,
             stop_event,
         )
-        photo_timer = start_photo_timer(stop_event) if options.upload_photo else None
+        photo_timer = start_photo_timer(stop_event) if options.photo_mode == "live" else None
 
         try:
             transcriber = LocalTranscriber(DEFAULT_TRANSCRIPTION_MODEL)
             speaker_identifier = SpeakerIdentifier()
+            photo_tracker = PhotoUploadTracker()
             while True:
                 audio_path = next_stream_segment(segment_queue)
                 if audio_path is None:
@@ -111,6 +123,7 @@ def stream_loop(options: RuntimeOptions) -> None:
                     speaker_identifier,
                     options,
                     include_mode_prompt=is_first_submission,
+                    photo_tracker=photo_tracker,
                 )
                 if submitted:
                     is_first_submission = False
@@ -148,7 +161,11 @@ def start_photo_timer(stop_event: threading.Event) -> threading.Thread:
     """Start a background timer that captures photos every configured interval."""
     photo_timer = threading.Thread(
         target=capture_photos_on_interval,
-        args=(stop_event, PHOTO_CAPTURE_INTERVAL_SECONDS),
+        args=(
+            stop_event,
+            LIVE_PHOTO_CAPTURE_INITIAL_SECONDS,
+            LIVE_PHOTO_CAPTURE_INTERVAL_SECONDS,
+        ),
     )
     photo_timer.start()
     return photo_timer
@@ -156,10 +173,11 @@ def start_photo_timer(stop_event: threading.Event) -> threading.Thread:
 
 def capture_photos_on_interval(
     stop_event: threading.Event,
+    initial_seconds: float,
     interval_seconds: float,
 ) -> None:
-    """Capture photos at +interval, +2*interval, +3*interval until stopped."""
-    next_capture_time = time.monotonic() + interval_seconds
+    """Capture photos at +initial, then every interval until stopped."""
+    next_capture_time = time.monotonic() + initial_seconds
     while True:
         wait_seconds = max(0.0, next_capture_time - time.monotonic())
         if stop_event.wait(wait_seconds):
@@ -194,6 +212,7 @@ def process_stream_segment(
     speaker_identifier: SpeakerIdentifier,
     options: RuntimeOptions,
     include_mode_prompt: bool,
+    photo_tracker: PhotoUploadTracker,
 ) -> bool:
     """Transcribe one stream segment and optionally submit it for feedback."""
     speaker_hint = build_speaker_hint(audio_path, speaker_identifier)
@@ -207,8 +226,8 @@ def process_stream_segment(
         return False
 
     if options.ask_chatgpt:
-        photo_path = latest_interview_photo() if options.upload_photo else None
-        submit_to_chatgpt(
+        photo_path, photo_signature = next_photo_upload(options.photo_mode, photo_tracker)
+        submitted_to_chatgpt = submit_to_chatgpt(
             build_stream_prompt(
                 transcript,
                 include_mode_prompt,
@@ -216,30 +235,53 @@ def process_stream_segment(
                 include_photo_context=photo_path is not None,
             ),
             photo_path=photo_path,
-            browser_mode=options.browser_mode,
         )
+        if submitted_to_chatgpt and photo_signature is not None:
+            photo_tracker.last_signature = photo_signature
     logger.info("")
     return options.ask_chatgpt
 
 
-def latest_interview_photo(photo_dir: Path = INTERVIEW_PHOTO_DIR) -> Path | None:
-    """Return the newest non-empty image in the interview photo directory."""
-    if not photo_dir.exists():
-        logger.warning("No interview photo directory found at {}", photo_dir)
+def next_photo_upload(
+    photo_mode: PhotoMode | None,
+    photo_tracker: PhotoUploadTracker,
+) -> tuple[Path | None, PhotoSignature | None]:
+    """Return a photo path only when the selected image changed since upload."""
+    photo_path = interview_photo_path(photo_mode)
+    if photo_path is None:
+        return None, None
+
+    photo_signature = current_photo_signature(photo_path)
+    if photo_signature is None:
+        return photo_path, None
+
+    if photo_signature == photo_tracker.last_signature:
+        logger.info("Photo unchanged since last upload; submitting text only.")
+        return None, None
+
+    return photo_path, photo_signature
+
+
+def current_photo_signature(photo_path: Path) -> PhotoSignature | None:
+    """Return the file identity used to decide whether a photo changed."""
+    try:
+        stat = photo_path.stat()
+    except FileNotFoundError:
         return None
 
-    photos = [
-        path
-        for path in photo_dir.iterdir()
-        if path.is_file()
-        and path.suffix.lower() in INTERVIEW_PHOTO_EXTENSIONS
-        and path.stat().st_size > 0
-    ]
-    if not photos:
-        logger.warning("No interview photos found in {}", photo_dir)
+    if not photo_path.is_file() or stat.st_size == 0:
         return None
 
-    return max(photos, key=lambda path: (path.stat().st_mtime_ns, path.name))
+    return stat.st_mtime_ns, stat.st_size
+
+
+def interview_photo_path(photo_mode: PhotoMode | None) -> Path | None:
+    """Return the fixed photo path for the selected photo mode."""
+    if photo_mode == "test":
+        return TEST_INTERVIEW_PHOTO_PATH
+    if photo_mode == "live":
+        return LIVE_INTERVIEW_PHOTO_PATH
+    return None
 
 
 def build_speaker_hint(audio_path: Path, speaker_identifier: SpeakerIdentifier) -> SpeakerHint:
@@ -310,16 +352,20 @@ def print_stream_mode_banner(options: RuntimeOptions) -> None:
     logger.info("Stream mode is active.")
     logger.info("Audio start trigger: speech begins")
     logger.info("Segment trigger: {:g}s of silence", STREAM_SILENCE_SECONDS)
-    if options.upload_photo:
+    if options.photo_mode is not None:
         logger.info(
-            "Photo upload: enabled; using latest photo in {}",
-            INTERVIEW_PHOTO_DIR,
+            "Photo upload: {} mode; using {}",
+            options.photo_mode,
+            interview_photo_path(options.photo_mode),
         )
-        logger.info(
-            "Photo capture: every {:g}s after an initial {:g}s wait",
-            PHOTO_CAPTURE_INTERVAL_SECONDS,
-            PHOTO_CAPTURE_INTERVAL_SECONDS,
-        )
+        if options.photo_mode == "live":
+            logger.info(
+                "Photo capture: first after {:g} min; then every {:g} min",
+                LIVE_PHOTO_CAPTURE_INITIAL_SECONDS / 60,
+                LIVE_PHOTO_CAPTURE_INTERVAL_SECONDS / 60,
+            )
+        else:
+            logger.info("Photo capture: disabled in test mode")
     else:
         logger.info("Photo upload: disabled")
     logger.info("Recording continues while segments are transcribed")

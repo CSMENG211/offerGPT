@@ -3,7 +3,7 @@
 
 This module can be imported and used from other code, or run directly:
 
-    python src/camera_photo.py
+    python src/camera.py
 """
 
 from __future__ import annotations
@@ -12,14 +12,12 @@ import argparse
 import shutil
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 
-from constants import INTERVIEW_PHOTO_DIR
+from constants import LIVE_INTERVIEW_PHOTO_PATH
 
 
 DEFAULT_CAMERA_NAME = "FaceTime HD Camera"
-DEFAULT_OUTPUT_DIR = INTERVIEW_PHOTO_DIR
 
 
 class CameraCaptureError(RuntimeError):
@@ -27,7 +25,6 @@ class CameraCaptureError(RuntimeError):
 
 
 def take_photo(
-    output_path: str | Path | None = None,
     *,
     camera_name: str = DEFAULT_CAMERA_NAME,
 ) -> Path:
@@ -37,8 +34,8 @@ def take_photo(
     MacBook camera by name. OpenCV is intentionally avoided because macOS camera
     indices can point at Continuity Camera devices such as an iPhone or iPad.
 
-    Photos are always written to ``/Users/flora/interview``. If ``output_path``
-    is provided, only its filename is used.
+    Photos are always written to ``/Users/flora/interview/live.jpg``, replacing
+    any existing image at that path.
     """
 
     if not shutil.which("imagesnap"):
@@ -48,7 +45,7 @@ def take_photo(
             "  brew install imagesnap"
         )
 
-    path = _resolve_output_path(output_path)
+    path = LIVE_INTERVIEW_PHOTO_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
 
     command = ["imagesnap", "-d", camera_name, str(path)]
@@ -71,27 +68,12 @@ def take_photo(
     return path
 
 
-def _resolve_output_path(output_path: str | Path | None) -> Path:
-    if output_path:
-        filename = Path(output_path).name
-    else:
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        filename = f"camera-photo-{timestamp}.jpg"
-
-    return DEFAULT_OUTPUT_DIR / filename
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Take one photo from the built-in macOS camera."
-    )
-    parser.add_argument(
-        "output",
-        nargs="?",
-        help=(
-            "Output filename. Directory components are ignored. "
-            "Default: camera-photo-YYYYmmdd-HHMMSS.jpg"
-        ),
+        description=(
+            "Take one photo from the built-in macOS camera and save it to "
+            f"{LIVE_INTERVIEW_PHOTO_PATH}."
+        )
     )
     parser.add_argument(
         "--camera-name",
@@ -104,7 +86,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     try:
-        path = take_photo(args.output, camera_name=args.camera_name)
+        path = take_photo(camera_name=args.camera_name)
     except CameraCaptureError as exc:
         print(exc, file=sys.stderr)
         raise SystemExit(1) from exc
