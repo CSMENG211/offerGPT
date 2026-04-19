@@ -32,10 +32,16 @@ def parse_args() -> RuntimeOptions:
         default="cdp",
         help="Browser automation mode for ChatGPT submission. Default: cdp",
     )
+    parser.add_argument(
+        "--enroll-me",
+        action="store_true",
+        help="Record prompted interviewee voice samples and save the voice profile.",
+    )
     args = parser.parse_args()
     return RuntimeOptions(
         ask_chatgpt=args.ask_chatgpt,
         browser_mode=args.browser_mode,
+        enroll_me=args.enroll_me,
     )
 
 

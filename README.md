@@ -46,6 +46,24 @@ To only print transcripts without sending them to ChatGPT:
 python main.py --no-ask-chatgpt
 ```
 
+### Voice Enrollment
+
+Record your interviewee voice profile:
+
+```sh
+python main.py --enroll-me
+```
+
+SecondVoice will show up to 20 interview-style sentences. Read each sentence out
+loud using the same microphone and room you plan to use for mock interviews. The
+enrollment is saved locally in `~/.secondvoice` and reused until the next time
+you run `--enroll-me`, which replaces the previous profile.
+
+During streaming, each segment includes an interviewee voice match confidence
+from `0.0` to `1.0` in the ChatGPT prompt. Higher means the audio sounds more
+like the enrolled interviewee; lower means it is more likely the interviewer or
+unknown. ChatGPT treats this as a hint alongside the transcript text.
+
 ### Ask ChatGPT
 
 Install Playwright's browser once:
