@@ -9,10 +9,10 @@ from time import sleep
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from app import build_stream_prompt
-from browser import submit_to_chatgpt
 from constants import DEFAULT_CDP_URL, STATIC_INTERVIEW_PHOTO_PATH
+from gpt import submit_to_chatgpt
 from logging_config import configure_logging
+from prompts import build_stream_prompt
 
 
 CDP_BROWSER_PROFILE_DIR = Path.home() / ".secondvoice" / "cdp-browser-profile"

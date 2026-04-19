@@ -2,7 +2,7 @@ from array import array
 from collections import deque
 import math
 
-from constants import (
+from audio.constants import (
     AUDIO_CHUNK_SECONDS,
     AUDIO_PRE_ROLL_SECONDS,
     AUDIO_SAMPLE_RATE,

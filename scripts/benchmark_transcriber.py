@@ -5,11 +5,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from constants import (  # noqa: E402
+from speech.constants import (  # noqa: E402
     DEFAULT_FINAL_TRANSCRIPTION_BACKEND,
     DEFAULT_FINAL_TRANSCRIPTION_MODEL,
 )
-from transcription import create_transcriber  # noqa: E402
+from speech import create_transcriber  # noqa: E402
 
 
 def main() -> None:

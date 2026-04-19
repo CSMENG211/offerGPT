@@ -2,7 +2,7 @@ from collections.abc import Iterable
 from pathlib import Path
 import wave
 
-from constants import (
+from audio.constants import (
     AUDIO_CHANNELS,
     AUDIO_SAMPLE_RATE,
     AUDIO_SAMPLE_WIDTH_BYTES,

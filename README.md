@@ -61,7 +61,7 @@ ChatGPT.
 SecondVoice uses a fast `faster-whisper` model for draft semantic endpoint
 checks and an `mlx-whisper` model for final completed-segment transcription on
 Apple Silicon. These backends and model names are configured in
-`src/constants.py`.
+`src/speech/constants.py`.
 
 For `--no-ask`, MLX model names are resolved through Hugging Face so the local
 cache can be downloaded or refreshed. For normal ChatGPT runs, SecondVoice uses

@@ -2,7 +2,7 @@
 
 SecondVoice is a local mock-interview assistant. It listens to microphone audio, splits speech into interview segments, transcribes each segment locally, optionally estimates whether the speaker sounds like the enrolled interviewee, optionally attaches interview-board photos, and submits the resulting prompt to ChatGPT for classification and feedback.
 
-The application is intentionally small and file-oriented. `main.py` handles command-line setup, while `src/app.py` coordinates the runtime workflow across focused modules for audio capture, transcription, speaker identification, camera capture, browser automation, constants, and logging.
+The application is intentionally small and file-oriented. `main.py` handles command-line setup, `src/preflight.py` checks local dependencies, and `src/app.py` coordinates the stream runtime across focused packages for audio capture, speech processing, prompt construction, photo handling, camera capture, browser automation, constants, and logging.
 
 ## Goals
 
@@ -32,11 +32,11 @@ python main.py
 
 This is the default path.
 
-1. `main.py` configures logging, parses CLI flags, and calls `app.run()`.
+1. `main.py` configures logging, parses CLI flags, runs `preflight.check_runtime_dependencies()`, and calls `app.run()`.
 2. `app.run()` enters `stream_loop()` unless enrollment mode is requested.
 3. `stream_loop()` creates a temporary directory for WAV segments.
 4. `start_stream_recorder()` starts a background thread running `audio.stream_utterance_segments()`.
-5. If photo capture is enabled, `start_photo_timer()` starts a second background thread running `capture_photos_on_interval()`.
+5. If photo capture is enabled, `photo.start_photo_timer()` starts a second background thread running `capture_photos_on_interval()`.
 6. The main thread loads the configured endpoint and final transcribers, `SpeakerIdentifier`, and `PhotoUploadTracker`.
 7. During recording, the audio loop queues a semantic endpoint job after a 3-second pause. A semantic worker thread draft-transcribes the snapshot with the fast endpoint Whisper model, sends that transcript to local Ollama `qwen2.5:1.5b`, and returns a result. The recorder keeps reading microphone input while that happens and cuts the segment early only when the current, non-stale result is `COMPLETE`. If the detector returns incomplete or fails, the hard 10-second silence fallback still cuts the segment.
 8. For every queued WAV segment, `process_stream_segment()`:
@@ -59,7 +59,7 @@ Command:
 python main.py --no-ask
 ```
 
-This follows the same audio capture, transcription, and speaker-hint path as stream mode, but skips `browser.submit_to_chatgpt()`. It is useful for testing microphone capture, silence thresholds, Whisper transcription, and voice matching without touching ChatGPT.
+This follows the same audio capture, transcription, and speaker-hint path as stream mode, but skips `gpt.submit_to_chatgpt()`. It is useful for testing microphone capture, silence thresholds, Whisper transcription, and voice matching without touching ChatGPT.
 
 ### 3. Voice Enrollment Path
 
@@ -71,7 +71,7 @@ python main.py --enroll
 
 This path records an interviewee voice profile.
 
-1. `app.run()` calls `enroll_interviewee_voice()`.
+1. `app.run()` calls `speech.enroll_interviewee_voice()`.
 2. The app prompts the user to read each sentence in `SPEAKER_ENROLLMENT_PROMPTS`.
 3. `audio.capture_enrollment_utterance()` records each sentence into a temporary WAV file.
 4. `SpeakerIdentifier.enroll_from_clips()` encodes each clip with SpeechBrain, averages the embeddings, normalizes the result, and persists it.
@@ -94,7 +94,7 @@ python main.py --photo-mode live
 - `test`: captures `/Users/flora/interview/test.jpg` after 60 seconds and then every 60 seconds.
 - `live`: captures `/Users/flora/interview/live.jpg` after 10 minutes and then every 10 minutes.
 
-`PhotoUploadTracker` stores the last uploaded photo signature as `(mtime_ns, size)`. If the selected photo is missing, empty, or unchanged, the app submits text only.
+`photo.PhotoUploadTracker` stores the last uploaded photo signature as `(mtime_ns, size)`. If the selected photo is missing, empty, or unchanged, the app submits text only.
 
 ### 5. Manual ChatGPT Submission Test
 
@@ -123,11 +123,11 @@ Microphone
   -> audio.stream_utterance_segments()
   -> temporary WAV segment
   -> app.process_stream_segment()
-  -> speaker_id.SpeakerIdentifier.match()
-  -> transcription.Transcriber.transcribe()
-  -> app.build_stream_prompt()
-  -> optional photo selected by app.next_photo_upload()
-  -> browser.submit_to_chatgpt()
+  -> speech.SpeakerIdentifier.match()
+  -> speech.Transcriber.transcribe()
+  -> prompts.build_stream_prompt()
+  -> optional photo selected by photo.next_photo_upload()
+  -> gpt.submit_to_chatgpt()
   -> ChatGPT conversation
 ```
 
@@ -137,7 +137,7 @@ Enrollment has a separate data flow:
 Microphone
   -> audio.capture_enrollment_utterance()
   -> temporary enrollment WAV clips
-  -> speaker_id.SpeakerIdentifier.enroll_from_clips()
+  -> speech.SpeakerIdentifier.enroll_from_clips()
   -> ~/.secondvoice voice profile files
 ```
 
@@ -156,32 +156,49 @@ Current CLI flags:
 - `--enroll`: Runs voice enrollment instead of stream mode.
 - `--photo-mode`: Selects `none`, `test`, or `live` photo behavior.
 
+### `src/preflight.py`
+
+Startup dependency checks.
+
+- `check_runtime_dependencies(options)`: Runs all required startup checks and aborts before microphone capture when a dependency is missing.
+- `ollama_model_is_ready()`: Checks that Ollama is reachable and `qwen2.5:1.5b` is installed.
+- `cdp_browser_is_ready()`: Checks that Chrome CDP is reachable for ChatGPT submission runs.
+
 ### `src/app.py`
 
-The orchestration layer. It owns high-level runtime paths, threading, prompt construction, photo decisions, and console output.
+The stream-runtime orchestration layer. It owns high-level runtime paths, recorder threading, segment processing, speaker hint fallback, and console output.
 
 - `RuntimeOptions`: Immutable dataclass carrying CLI-selected behavior.
-- `PhotoUploadTracker`: Mutable dataclass storing the last uploaded photo signature.
 - `run(options)`: Dispatches to enrollment or stream mode.
-- `enroll_interviewee_voice()`: Records prompted enrollment clips and persists a voice profile.
 - `stream_loop(options)`: Runs the continuous capture/transcribe/submit loop.
 - `start_stream_recorder(output_dir, segment_queue, stop_event)`: Starts audio recording in a background thread.
-- `start_photo_timer(stop_event, photo_mode)`: Starts periodic photo capture in a background thread.
-- `photo_capture_settings(photo_mode)`: Maps `test` and `live` modes to path, initial delay, and interval.
-- `capture_photos_on_interval(stop_event, photo_path, initial_seconds, interval_seconds)`: Captures photos until stopped.
 - `next_stream_segment(segment_queue)`: Polls the recorder queue and raises recorder exceptions on the main thread.
 - `process_stream_segment(...)`: Handles one completed WAV segment end to end.
-- `next_photo_upload(photo_mode, photo_tracker)`: Selects a photo only if it is available and changed.
-- `current_photo_signature(photo_path)`: Returns `(mtime_ns, size)` for a valid photo file.
-- `interview_photo_path(photo_mode)`: Maps `test` and `live` modes to their fixed photo paths; `none` returns no path.
 - `build_speaker_hint(audio_path, speaker_identifier)`: Produces a `SpeakerHint`, falling back to `unknown` if voice matching fails.
-- `build_stream_prompt(...)`: Builds the prompt sent to ChatGPT.
-- `speaker_hint_value(speaker_hint)`: Formats confidence for the prompt.
-- `speaker_hint_role(speaker_hint)`: Formats role hint for the prompt.
-- `print_enrollment_prompt(index, total, prompt)`: Logs one enrollment sentence.
 - `print_speaker_hint(speaker_hint)`: Logs speaker-match information.
 - `print_stream_mode_banner(options)`: Logs active runtime settings.
 - `print_transcript(transcript)`: Logs the transcript or a no-speech marker.
+
+### `src/photo.py`
+
+Photo capture and upload-selection runtime.
+
+- `PhotoUploadTracker`: Mutable dataclass storing the last uploaded photo signature.
+- `start_photo_timer(stop_event, photo_mode)`: Starts periodic photo capture in a background thread.
+- `photo_capture_settings(photo_mode)`: Maps `test` and `live` modes to path, initial delay, and interval.
+- `capture_photos_on_interval(stop_event, photo_path, initial_seconds, interval_seconds)`: Captures photos until stopped.
+- `next_photo_upload(photo_mode, photo_tracker)`: Selects a photo only if it is available and changed.
+- `current_photo_signature(photo_path)`: Returns `(mtime_ns, size)` for a valid photo file.
+- `interview_photo_path(photo_mode)`: Maps `test` and `live` modes to their fixed photo paths; `none` returns no path.
+
+### `src/prompts.py`
+
+Prompt construction for ChatGPT submissions.
+
+- `PHOTO_CONTEXT_PROMPT`: Instruction inserted when a photo is attached.
+- `build_stream_prompt(...)`: Builds the prompt sent to ChatGPT.
+- `speaker_hint_value(speaker_hint)`: Formats confidence for the prompt.
+- `speaker_hint_role(speaker_hint)`: Formats role hint for the prompt.
 
 ### `src/audio/`
 
@@ -213,7 +230,18 @@ Audio capture, segmentation, WAV writing, and amplitude helpers. `src/audio/__in
 - `chunk_is_speech(chunk, threshold)`: Uses RMS amplitude to classify a chunk as speech or silence.
 - `rms_level(chunk)`: Computes RMS amplitude for int16 audio samples.
 
-### `src/endpoint_detector.py`
+### `src/speech/`
+
+Speech understanding, transcription, endpointing, and speaker identification. `src/speech/__init__.py` re-exports the public types and functions used by the app.
+
+#### `src/speech/enrollment.py`
+
+Interviewee voice enrollment flow.
+
+- `enroll_interviewee_voice()`: Records prompted enrollment clips and persists a voice profile.
+- `print_enrollment_prompt(index, total, prompt)`: Logs one enrollment sentence.
+
+#### `src/speech/endpoint_detector.py`
 
 Local semantic endpointing through Ollama.
 
@@ -222,7 +250,7 @@ Local semantic endpointing through Ollama.
 - `OllamaSemanticEndpointDetector.is_complete(audio_path)`: Transcribes a draft WAV snapshot, classifies the transcript through Ollama, logs the result, and returns `True` only for `COMPLETE`.
 - `classify_endpoint_transcript(transcript, model, url, timeout_seconds)`: Sends the shared endpoint prompt to the Ollama chat API and returns the normalized label plus latency.
 
-### `src/transcription.py`
+#### `src/speech/transcription.py`
 
 Local transcription backend interface and implementations.
 
@@ -234,7 +262,7 @@ Local transcription backend interface and implementations.
 - `MlxWhisperTranscriber`: Runs `mlx-whisper`, currently used for final completed-segment transcription on Apple Silicon.
 - `transcribe(audio_path)`: Backend implementations transcribe a WAV file with the coding-interview and system-design initial prompt where supported, then return joined plain text. Calls are serialized per transcriber instance.
 
-### `src/speaker_id.py`
+#### `src/speech/speaker_id.py`
 
 Interviewee voice enrollment and matching.
 
@@ -253,18 +281,25 @@ Interviewee voice enrollment and matching.
 
 ### `src/browser.py`
 
-Playwright automation for submitting prompts to ChatGPT.
+Generic browser/CDP helpers used by browser automation.
 
 - `BrowserSession`: Dataclass that owns browser context resources.
 - `BrowserSession.close()`: Closes resources only when this process owns them.
-- `submit_to_chatgpt(prompt, photo_path, cdp_url)`: Opens ChatGPT, attaches an optional photo, fills the prompt, submits it, and brings Chrome forward on macOS.
 - `connect_to_cdp_browser(playwright, cdp_url)`: Connects to an existing Chrome over CDP.
-- `open_chatgpt_page(context)`: Reuses the dedicated marked SecondVoice ChatGPT tab or opens and marks a new one.
-- `is_secondvoice_chatgpt_page(page)`: Checks whether a ChatGPT tab has the SecondVoice tab marker.
-- `mark_secondvoice_chatgpt_page(page)`: Marks one ChatGPT tab as the dedicated SecondVoice automation tab and adds a visible title prefix plus in-page badge.
 - `activate_chrome()`: Brings the CDP automation Chrome process to the foreground on macOS, with a generic Chrome activation fallback.
 - `automation_chrome_pid()`: Finds the main Chrome process launched with the automation profile and CDP port.
 - `activate_process(pid)`: Activates one macOS process by PID through System Events.
+
+### `src/gpt/`
+
+ChatGPT-specific browser automation. `src/gpt/__init__.py` re-exports the public `submit_to_chatgpt()` function used by the app and smoke test.
+
+#### `src/gpt/actions.py`
+
+- `submit_to_chatgpt(prompt, photo_path, cdp_url)`: Opens ChatGPT, attaches an optional photo, fills the prompt, submits it, and brings Chrome forward on macOS.
+- `open_chatgpt_page(context)`: Reuses the dedicated marked SecondVoice ChatGPT tab or opens and marks a new one.
+- `is_secondvoice_chatgpt_page(page)`: Checks whether a ChatGPT tab has the SecondVoice tab marker.
+- `mark_secondvoice_chatgpt_page(page)`: Marks one ChatGPT tab as the dedicated SecondVoice automation tab and adds a visible title prefix plus in-page badge.
 - `stabilize_chatgpt_theme(page)`: Pins the automation page to the dark color scheme before submission.
 - `fill_prompt(prompt_box, prompt)`: Writes the prompt into the composer.
 - `submit_prompt(page, prompt_box, wait_for_upload)`: Sends the prompt by button click or Enter fallback.
@@ -282,18 +317,30 @@ macOS still-photo capture.
 - `parse_args()`: Defines standalone camera CLI flags.
 - `main()`: Captures one photo and prints the saved path.
 
+### `src/audio/constants.py`
+
+Audio capture and segmentation configuration.
+
+- Audio shape: sample rate, channels, sample width, chunk size, and pre-roll.
+- Segmentation: semantic pause duration, hard silence fallback duration, and RMS speech threshold.
+
+### `src/speech/constants.py`
+
+Speech processing configuration.
+
+- Transcription: configurable endpoint and final Whisper backends/models.
+- ASR prompt terms: separate coding-interview and system-design vocabulary for terms like BFS, DFS, topological sort, idempotency, relational databases, consistency, queues, reliability, and common architecture phrases.
+- Endpointing: Ollama URL, model name, keep-alive, request timeout, labels, and semantic endpoint prompt.
+- Speaker ID: profile paths, model source, match threshold, and enrollment prompts.
+
 ### `src/constants.py`
 
-Central configuration values.
+App-level configuration values that do not clearly belong to audio or speech.
 
 Important groups:
 
-- Audio shape: sample rate, channels, sample width, chunk size, pre-roll.
-- Segmentation: silence duration and RMS threshold.
-- Transcription: configurable endpoint and final Whisper backends/models, plus separate coding-interview and system-design vocabulary prompts for terms like BFS, DFS, topological sort, idempotency, relational databases, consistency, queues, reliability, and common architecture phrases.
 - Photo paths and capture intervals.
 - ChatGPT browser URL and CDP URL.
-- Speaker-profile paths, model source, threshold, and enrollment prompts.
 - `STREAM_PROMPT`, the system-style instruction sent on the first ChatGPT submission.
 
 ### `src/logging_config.py`
@@ -318,7 +365,7 @@ Ollama semantic-endpoint benchmark harness.
 - `main()`: Runs the fixed endpoint-completion case set against one or more Ollama models.
 - `prompt_for_models()`: Asks for model names when none are provided on the command line.
 - `run_model_benchmark(model)`: Prints per-case predictions and summary latency/error counts.
-- `classify(model, transcript)`: Calls the shared `endpoint_detector.classify_endpoint_transcript()` helper so benchmarks and runtime use the same prompt and Ollama request shape.
+- `classify(model, transcript)`: Calls the shared `speech.classify_endpoint_transcript()` helper so benchmarks and runtime use the same prompt and Ollama request shape.
 
 ### `scripts/benchmark_transcriber.py`
 
@@ -466,5 +513,5 @@ Temporary state:
 
 ## Maintenance Notes
 
-- Browser selectors in `src/browser.py` are intentionally defensive, but ChatGPT UI changes can still break submission or upload.
+- ChatGPT selectors in `src/gpt/actions.py` are intentionally defensive, but ChatGPT UI changes can still break submission or upload.
 - Photo paths are hard-coded for `/Users/flora/interview`; changing this should be centralized in `src/constants.py`.

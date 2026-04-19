@@ -5,8 +5,8 @@ from pathlib import Path
 
 from loguru import logger
 
-from constants import (
-    AUDIO_SAMPLE_RATE,
+from audio.constants import AUDIO_SAMPLE_RATE
+from speech.constants import (
     SPEAKER_MATCH_THRESHOLD,
     SPEAKER_MODEL_DIR,
     SPEAKER_MODEL_SOURCE,

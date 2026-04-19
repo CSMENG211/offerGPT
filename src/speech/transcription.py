@@ -5,7 +5,7 @@ import wave
 
 from loguru import logger
 
-from constants import (
+from speech.constants import (
     DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL,
     DEFAULT_FINAL_TRANSCRIPTION_BACKEND,
     DEFAULT_FINAL_TRANSCRIPTION_MODEL,

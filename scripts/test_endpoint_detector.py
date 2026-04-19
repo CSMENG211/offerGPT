@@ -6,7 +6,7 @@ from urllib.error import URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from endpoint_detector import (
+from speech import (
     DEFAULT_ENDPOINT_MODEL,
     OLLAMA_CHAT_URL,
     classify_endpoint_transcript,

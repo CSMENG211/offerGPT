@@ -16,7 +16,7 @@ from audio.levels import (
     create_pre_roll_buffer,
 )
 from audio.wav import open_wav_writer, write_wav_file
-from constants import (
+from audio.constants import (
     AUDIO_CHANNELS,
     AUDIO_SAMPLE_RATE,
     DEFAULT_SILENCE_THRESHOLD,

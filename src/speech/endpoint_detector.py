@@ -7,34 +7,16 @@ from urllib.request import Request, urlopen
 
 from loguru import logger
 
-from transcription import Transcriber
-
-OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
-DEFAULT_ENDPOINT_MODEL = "qwen2.5:1.5b"
-OLLAMA_KEEP_ALIVE = "60m"
-OLLAMA_REQUEST_TIMEOUT_SECONDS = 10
-ENDPOINT_LABEL_COMPLETE = "COMPLETE"
-ENDPOINT_LABEL_INCOMPLETE = "INCOMPLETE"
-
-ENDPOINT_SYSTEM_PROMPT = (
-    "You are an endpoint detector for live coding interview speech. "
-    "Return exactly one word: COMPLETE or INCOMPLETE. "
-    "COMPLETE means the transcript is usable as a standalone segment. "
-    "It may be short. A stated value, action, condition, complexity, "
-    "edge case, or plan step can be COMPLETE. "
-    "INCOMPLETE means the transcript ends mid-phrase, after a connector, "
-    "or clearly expects more words immediately. "
-    "Examples: Transcript: so it is -> INCOMPLETE. "
-    "Transcript: so it is true -> COMPLETE. "
-    "Transcript: return -> INCOMPLETE. "
-    "Transcript: return false -> COMPLETE. "
-    "Transcript: the time complexity is -> INCOMPLETE. "
-    "Transcript: the time complexity is O of n -> COMPLETE. "
-    "Transcript: I would use a hash map because -> INCOMPLETE. "
-    "Transcript: I would use a hash map because lookup is constant time -> COMPLETE. "
-    "Transcript: and then -> INCOMPLETE. "
-    "Transcript: and then I move the left pointer -> COMPLETE."
+from speech.constants import (
+    DEFAULT_ENDPOINT_MODEL,
+    ENDPOINT_LABEL_COMPLETE,
+    ENDPOINT_LABEL_INCOMPLETE,
+    ENDPOINT_SYSTEM_PROMPT,
+    OLLAMA_CHAT_URL,
+    OLLAMA_KEEP_ALIVE,
+    OLLAMA_REQUEST_TIMEOUT_SECONDS,
 )
+from speech.transcription import Transcriber
 
 
 class OllamaSemanticEndpointDetector:
