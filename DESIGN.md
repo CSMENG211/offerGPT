@@ -216,6 +216,8 @@ Local transcription backend interface and implementations.
 
 - `Transcriber`: Protocol shared by transcription backends.
 - `create_transcriber(backend, model)`: Factory that returns the configured backend implementation.
+- `model_path_for_run(backend, model, use_local_cache)`: Uses repo names directly for refresh/test runs, but resolves MLX Hugging Face repo names to local cached snapshot paths for normal ChatGPT runs.
+- `cached_huggingface_snapshot_path(repo_id)`: Finds the newest local Hugging Face cache snapshot for an MLX model without refreshing metadata.
 - `FasterWhisperTranscriber`: Loads and runs `faster-whisper`, currently used for fast draft endpoint transcription.
 - `MlxWhisperTranscriber`: Runs `mlx-whisper`, currently used for final completed-segment transcription on Apple Silicon.
 - `transcribe(audio_path)`: Backend implementations transcribe a WAV file with the coding-interview and system-design initial prompt where supported, then return joined plain text. Calls are serialized per transcriber instance.

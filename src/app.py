@@ -34,7 +34,7 @@ from constants import (
 )
 from endpoint_detector import OllamaSemanticEndpointDetector
 from speaker_id import SpeakerHint, SpeakerIdentifier
-from transcription import Transcriber, create_transcriber
+from transcription import Transcriber, create_transcriber, model_path_for_run
 
 PhotoMode = Literal["none", "test", "live"]
 PhotoSignature = tuple[int, int]
@@ -122,13 +122,24 @@ def stream_loop(options: RuntimeOptions) -> None:
         )
 
         try:
-            endpoint_transcriber = create_transcriber(
+            use_local_transcription_cache = options.ask_chatgpt
+            endpoint_transcription_model = model_path_for_run(
                 DEFAULT_ENDPOINT_TRANSCRIPTION_BACKEND,
                 DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL,
+                use_local_cache=use_local_transcription_cache,
+            )
+            final_transcription_model = model_path_for_run(
+                DEFAULT_FINAL_TRANSCRIPTION_BACKEND,
+                DEFAULT_FINAL_TRANSCRIPTION_MODEL,
+                use_local_cache=use_local_transcription_cache,
+            )
+            endpoint_transcriber = create_transcriber(
+                DEFAULT_ENDPOINT_TRANSCRIPTION_BACKEND,
+                endpoint_transcription_model,
             )
             final_transcriber = create_transcriber(
                 DEFAULT_FINAL_TRANSCRIPTION_BACKEND,
-                DEFAULT_FINAL_TRANSCRIPTION_MODEL,
+                final_transcription_model,
             )
             semantic_endpoint_detector.set_transcriber(endpoint_transcriber)
             speaker_identifier = SpeakerIdentifier()

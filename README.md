@@ -63,6 +63,11 @@ checks and an `mlx-whisper` model for final completed-segment transcription on
 Apple Silicon. These backends and model names are configured in
 `src/constants.py`.
 
+For `--no-ask`, MLX model names are resolved through Hugging Face so the local
+cache can be downloaded or refreshed. For normal ChatGPT runs, SecondVoice uses
+the already-cached local MLX snapshot path and will abort if the model has not
+been warmed locally yet.
+
 To compare transcription backends on a saved WAV file:
 
 ```sh
