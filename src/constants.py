@@ -11,7 +11,8 @@ STREAM_SEMANTIC_SILENCE_SECONDS = 3.0
 STREAM_HARD_SILENCE_SECONDS = 10.0
 DEFAULT_SILENCE_THRESHOLD = 500
 
-DEFAULT_TRANSCRIPTION_MODEL = "small"
+DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL = "small"
+DEFAULT_FINAL_TRANSCRIPTION_MODEL = "medium"
 CODING_TRANSCRIPTION_TERMS = (
     "two sum, three sum, sliding window, two pointers, left pointer, right pointer, "
     "hash map, hash set, stack, queue, heap, priority queue, deque, trie, graph, "

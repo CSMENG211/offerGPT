@@ -3,9 +3,9 @@ import threading
 
 from loguru import logger
 
-from constants import DEFAULT_TRANSCRIPTION_MODEL, TRANSCRIPTION_INITIAL_PROMPT
+from constants import DEFAULT_FINAL_TRANSCRIPTION_MODEL, TRANSCRIPTION_INITIAL_PROMPT
 
-DEFAULT_MODEL = DEFAULT_TRANSCRIPTION_MODEL
+DEFAULT_MODEL = DEFAULT_FINAL_TRANSCRIPTION_MODEL
 
 
 class LocalTranscriber:
@@ -15,10 +15,13 @@ class LocalTranscriber:
         """Load the configured Whisper model into memory."""
         from faster_whisper import WhisperModel
 
-        logger.info("Loading local Whisper model. The first run may download model files...")
+        logger.info(
+            "Loading local Whisper model {}. The first run may download model files...",
+            model,
+        )
         self.model = WhisperModel(model, device="auto", compute_type="auto")
         self._lock = threading.Lock()
-        logger.info("Model loaded.")
+        logger.info("Whisper model loaded: {}", model)
 
     def transcribe(self, audio_path: Path, *, log_progress: bool = True) -> str:
         """Transcribe a WAV file and return plain text."""

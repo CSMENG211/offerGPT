@@ -58,6 +58,10 @@ python main.py
 By default, SecondVoice streams continuously and submits transcript segments to
 ChatGPT.
 
+SecondVoice uses a fast Whisper model for draft semantic endpoint checks and a
+stronger Whisper model for final completed-segment transcription. These are
+configured in `src/constants.py`.
+
 Logs are written to `python.log` in the current working directory.
 
 Photo capture and upload are disabled by default. Use `--photo-mode test` or

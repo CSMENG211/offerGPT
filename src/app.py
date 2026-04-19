@@ -13,7 +13,8 @@ from browser import submit_to_chatgpt
 from camera import CameraCaptureError, take_photo
 from constants import (
     DEFAULT_SILENCE_THRESHOLD,
-    DEFAULT_TRANSCRIPTION_MODEL,
+    DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL,
+    DEFAULT_FINAL_TRANSCRIPTION_MODEL,
     LIVE_PHOTO_CAPTURE_INITIAL_SECONDS,
     LIVE_PHOTO_CAPTURE_INTERVAL_SECONDS,
     LIVE_INTERVIEW_PHOTO_PATH,
@@ -119,8 +120,9 @@ def stream_loop(options: RuntimeOptions) -> None:
         )
 
         try:
-            transcriber = LocalTranscriber(DEFAULT_TRANSCRIPTION_MODEL)
-            semantic_endpoint_detector.set_transcriber(transcriber)
+            endpoint_transcriber = LocalTranscriber(DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL)
+            final_transcriber = LocalTranscriber(DEFAULT_FINAL_TRANSCRIPTION_MODEL)
+            semantic_endpoint_detector.set_transcriber(endpoint_transcriber)
             speaker_identifier = SpeakerIdentifier()
             photo_tracker = PhotoUploadTracker()
             while True:
@@ -130,7 +132,7 @@ def stream_loop(options: RuntimeOptions) -> None:
 
                 submitted = process_stream_segment(
                     audio_path,
-                    transcriber,
+                    final_transcriber,
                     speaker_identifier,
                     options,
                     include_mode_prompt=is_first_submission,
@@ -398,6 +400,8 @@ def print_stream_mode_banner(options: RuntimeOptions) -> None:
         "Semantic endpoint check: {:g}s pause via local Ollama qwen2.5:1.5b",
         STREAM_SEMANTIC_SILENCE_SECONDS,
     )
+    logger.info("Endpoint transcription model: {}", DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL)
+    logger.info("Final transcription model: {}", DEFAULT_FINAL_TRANSCRIPTION_MODEL)
     if options.photo_mode != "none":
         logger.info(
             "Photo upload: {} mode; using {}",
