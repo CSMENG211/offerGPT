@@ -12,6 +12,10 @@ DEFAULT_SILENCE_THRESHOLD = 500
 
 DEFAULT_TRANSCRIPTION_MODEL = "small"
 
+PHOTO_CAPTURE_INTERVAL_SECONDS = 5 * 60
+INTERVIEW_PHOTO_DIR = Path("/Users/flora/interview")
+INTERVIEW_PHOTO_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".heic"})
+
 CHATGPT_URL = "https://chatgpt.com/"
 DEFAULT_BROWSER_PROFILE = Path.home() / ".secondvoice" / "browser-profile"
 DEFAULT_CDP_URL = "http://127.0.0.1:9222"

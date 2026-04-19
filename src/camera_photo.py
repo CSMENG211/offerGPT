@@ -15,9 +15,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from constants import INTERVIEW_PHOTO_DIR
+
 
 DEFAULT_CAMERA_NAME = "FaceTime HD Camera"
-DEFAULT_OUTPUT_DIR = Path("/Users/flora/interview")
+DEFAULT_OUTPUT_DIR = INTERVIEW_PHOTO_DIR
 
 
 class CameraCaptureError(RuntimeError):

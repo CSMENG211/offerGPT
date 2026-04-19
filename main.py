@@ -37,11 +37,17 @@ def parse_args() -> RuntimeOptions:
         action="store_true",
         help="Record prompted interviewee voice samples and save the voice profile.",
     )
+    parser.add_argument(
+        "--upload-photo",
+        action="store_true",
+        help="Upload the latest photo from /Users/flora/interview/ with each ChatGPT prompt.",
+    )
     args = parser.parse_args()
     return RuntimeOptions(
         ask_chatgpt=args.ask_chatgpt,
         browser_mode=args.browser,
         enroll_me=args.enroll,
+        upload_photo=args.upload_photo,
     )
 
 
