@@ -12,6 +12,43 @@ STREAM_HARD_SILENCE_SECONDS = 10.0
 DEFAULT_SILENCE_THRESHOLD = 500
 
 DEFAULT_TRANSCRIPTION_MODEL = "small"
+CODING_TRANSCRIPTION_TERMS = (
+    "two sum, three sum, sliding window, two pointers, left pointer, right pointer, "
+    "hash map, hash set, stack, queue, heap, priority queue, deque, trie, graph, "
+    "tree, binary tree, binary search tree, linked list, node, edge, vertex, "
+    "BFS, DFS, breadth-first search, depth-first search, topological sort, "
+    "Dijkstra, Bellman-Ford, Floyd-Warshall, union find, disjoint set union, "
+    "dynamic programming, DP, recursion, backtracking, memoization, tabulation, "
+    "binary search, merge sort, quick sort, prefix sum, suffix sum, bitmask, "
+    "bit manipulation, monotonic stack, greedy, invariant, constraints, "
+    "time complexity, space complexity, Big O, O of n, O(n), O(log n), O(n log n), "
+    "O(n squared), constant time, linear time, return true, return false, null, "
+    "None, base case, edge case."
+)
+SYSTEM_DESIGN_TRANSCRIPTION_TERMS = (
+    "system design, API, REST, gRPC, HTTP, WebSocket, request, response, endpoint, "
+    "idempotent, idempotency, retry, timeout, backoff, rate limiter, throttling, "
+    "load balancer, reverse proxy, gateway, service discovery, microservice, "
+    "monolith, stateless, stateful, horizontal scaling, vertical scaling, "
+    "availability, reliability, durability, consistency, eventual consistency, "
+    "strong consistency, CAP theorem, quorum, leader, follower, primary, replica, "
+    "replication, failover, partition, shard, sharding, consistent hashing, "
+    "relational database, SQL, NoSQL, key-value store, document store, graph database, "
+    "schema, index, secondary index, transaction, ACID, isolation level, lock, "
+    "cache, Redis, Memcached, CDN, cache invalidation, write-through, write-back, "
+    "message queue, Kafka, RabbitMQ, pub sub, event bus, stream processing, "
+    "batch processing, async worker, cron job, object storage, blob storage, S3, "
+    "data lake, warehouse, OLTP, OLAP, latency, throughput, p99, tail latency, "
+    "SLA, SLO, observability, metrics, logs, tracing, alerting, circuit breaker, "
+    "backpressure, saga, two-phase commit, exactly once, at least once, "
+    "deduplication, hot key, fan out, fan in, pagination, cursor, authentication, "
+    "authorization, OAuth, JWT, TLS, encryption, multi-tenant."
+)
+TRANSCRIPTION_INITIAL_PROMPT = (
+    "This is a coding interview or system design interview transcript. "
+    f"Coding interview terms may include: {CODING_TRANSCRIPTION_TERMS} "
+    f"System design terms may include: {SYSTEM_DESIGN_TRANSCRIPTION_TERMS}"
+)
 
 TEST_PHOTO_CAPTURE_INITIAL_SECONDS = 60
 TEST_PHOTO_CAPTURE_INTERVAL_SECONDS = 60

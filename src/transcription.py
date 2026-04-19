@@ -3,7 +3,7 @@ import threading
 
 from loguru import logger
 
-from constants import DEFAULT_TRANSCRIPTION_MODEL
+from constants import DEFAULT_TRANSCRIPTION_MODEL, TRANSCRIPTION_INITIAL_PROMPT
 
 DEFAULT_MODEL = DEFAULT_TRANSCRIPTION_MODEL
 
@@ -25,7 +25,11 @@ class LocalTranscriber:
         with self._lock:
             if log_progress:
                 logger.info("Decoding audio...")
-            segments, _ = self.model.transcribe(str(audio_path), beam_size=5)
+            segments, _ = self.model.transcribe(
+                str(audio_path),
+                beam_size=5,
+                initial_prompt=TRANSCRIPTION_INITIAL_PROMPT,
+            )
 
             transcript_parts = []
             for segment in segments:

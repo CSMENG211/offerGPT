@@ -215,7 +215,7 @@ Local semantic endpointing through Ollama.
 Local Whisper transcription.
 
 - `LocalTranscriber.__init__(model)`: Loads a `faster-whisper` `WhisperModel`.
-- `LocalTranscriber.transcribe(audio_path)`: Transcribes a WAV file, logs partial segments, and returns joined plain text. Calls are serialized because the stream processor and semantic endpoint detector share one model instance.
+- `LocalTranscriber.transcribe(audio_path)`: Transcribes a WAV file with a coding-interview initial prompt, logs partial segments, and returns joined plain text. Calls are serialized because the stream processor and semantic endpoint detector share one model instance.
 
 ### `src/speaker_id.py`
 
@@ -273,7 +273,7 @@ Important groups:
 
 - Audio shape: sample rate, channels, sample width, chunk size, pre-roll.
 - Segmentation: silence duration and RMS threshold.
-- Transcription: default Whisper model.
+- Transcription: default Whisper model plus separate coding-interview and system-design vocabulary prompts for terms like BFS, DFS, topological sort, idempotency, relational databases, consistency, queues, reliability, and common architecture phrases.
 - Photo paths and capture intervals.
 - ChatGPT browser URL and CDP URL.
 - Speaker-profile paths, model source, threshold, and enrollment prompts.
