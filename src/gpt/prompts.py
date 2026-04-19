@@ -1,11 +1,5 @@
-from constants import STREAM_PROMPT
+from gpt.constants import PHOTO_CONTEXT_PROMPT, STREAM_PROMPT
 from speech import SpeakerHint
-
-PHOTO_CONTEXT_PROMPT = (
-    "Attached image context: the uploaded image is the current state of the "
-    "problem board. Use it as visual context for the entire problem, and "
-    "do not treat it as a separate question."
-)
 
 
 def build_stream_prompt(
@@ -20,8 +14,11 @@ def build_stream_prompt(
         "Classify and process this transcript segment.\n\n"
         f"Local voice role hint: {speaker_hint_role(speaker_hint)}\n"
         f"Enrolled interviewee voice match confidence: {speaker_hint_value(speaker_hint)}\n"
-        "Voice hint interpretation: higher means the audio is more likely the interviewee; "
-        "lower means it is more likely the interviewer or unknown.\n"
+        f"Raw voice cosine similarity: {speaker_hint_similarity(speaker_hint)}\n"
+        "Voice hint interpretation: confidence is a bounded normalization of cosine "
+        "similarity, not a probability or ground truth. Higher values suggest the "
+        "audio sounds more like the enrolled interviewee; lower values suggest "
+        "interviewer or unknown. Treat it as weaker than transcript/context.\n"
         f"{photo_context}\n"
         f"Transcript:\n{transcript}"
     )
@@ -43,3 +40,10 @@ def speaker_hint_role(speaker_hint: SpeakerHint | None) -> str:
     if speaker_hint is None or not speaker_hint.profile_available:
         return "unknown"
     return speaker_hint.role_hint
+
+
+def speaker_hint_similarity(speaker_hint: SpeakerHint | None) -> str:
+    """Return the raw cosine similarity for an optional speaker hint."""
+    if speaker_hint is None or speaker_hint.similarity is None:
+        return "unavailable"
+    return f"{speaker_hint.similarity:.3f}"

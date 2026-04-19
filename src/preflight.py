@@ -5,7 +5,7 @@ from typing import Protocol
 
 from loguru import logger
 
-from constants import DEFAULT_CDP_URL
+from automation.constants import DEFAULT_CDP_URL
 from speech import DEFAULT_ENDPOINT_MODEL, OLLAMA_CHAT_URL
 
 

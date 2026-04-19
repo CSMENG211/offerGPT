@@ -49,7 +49,7 @@ This is the default path.
    - Submits the prompt through Playwright browser automation.
 9. `Ctrl+C` stops the recorder and photo timer threads cleanly.
 
-The first successful ChatGPT submission includes the full `STREAM_PROMPT`, which defines SecondVoice's behavior. Later submissions include only the segment prompt so the current ChatGPT conversation can maintain context.
+The first successful ChatGPT submission includes the full `gpt.constants.STREAM_PROMPT`, which defines SecondVoice's behavior. Later submissions include only the segment prompt so the current ChatGPT conversation can maintain context.
 
 ### 2. Transcript-Only Mode
 
@@ -111,7 +111,7 @@ This script opens the automation Chrome profile on macOS only when the CDP endpo
 Command:
 
 ```sh
-python src/camera.py
+python src/vision/camera.py
 ```
 
 This captures one image with `imagesnap` from the named macOS camera and writes it to the live photo path. The default camera is `"FaceTime HD Camera"`.
@@ -125,8 +125,8 @@ Microphone
   -> app.process_stream_segment()
   -> speech.SpeakerIdentifier.match()
   -> speech.Transcriber.transcribe()
-  -> prompts.build_stream_prompt()
-  -> optional photo selected by photo.next_photo_upload()
+  -> gpt.build_stream_prompt()
+  -> optional photo selected by vision.next_photo_upload()
   -> gpt.submit_to_chatgpt()
   -> ChatGPT conversation
 ```
@@ -178,27 +178,6 @@ The stream-runtime orchestration layer. It owns high-level runtime paths, record
 - `print_speaker_hint(speaker_hint)`: Logs speaker-match information.
 - `print_stream_mode_banner(options)`: Logs active runtime settings.
 - `print_transcript(transcript)`: Logs the transcript or a no-speech marker.
-
-### `src/photo.py`
-
-Photo capture and upload-selection runtime.
-
-- `PhotoUploadTracker`: Mutable dataclass storing the last uploaded photo signature.
-- `start_photo_timer(stop_event, photo_mode)`: Starts periodic photo capture in a background thread.
-- `photo_capture_settings(photo_mode)`: Maps `test` and `live` modes to path, initial delay, and interval.
-- `capture_photos_on_interval(stop_event, photo_path, initial_seconds, interval_seconds)`: Captures photos until stopped.
-- `next_photo_upload(photo_mode, photo_tracker)`: Selects a photo only if it is available and changed.
-- `current_photo_signature(photo_path)`: Returns `(mtime_ns, size)` for a valid photo file.
-- `interview_photo_path(photo_mode)`: Maps `test` and `live` modes to their fixed photo paths; `none` returns no path.
-
-### `src/prompts.py`
-
-Prompt construction for ChatGPT submissions.
-
-- `PHOTO_CONTEXT_PROMPT`: Instruction inserted when a photo is attached.
-- `build_stream_prompt(...)`: Builds the prompt sent to ChatGPT.
-- `speaker_hint_value(speaker_hint)`: Formats confidence for the prompt.
-- `speaker_hint_role(speaker_hint)`: Formats role hint for the prompt.
 
 ### `src/audio/`
 
@@ -279,9 +258,11 @@ Interviewee voice enrollment and matching.
 - `SpeakerIdentifier._save_metadata(clip_count)`: Writes voice-profile metadata JSON.
 - `SpeakerIdentifier._torch()`: Imports `torch` with a user-facing error if dependencies are missing.
 
-### `src/browser.py`
+### `src/automation/`
 
-Generic browser/CDP helpers used by browser automation.
+Generic browser/CDP helpers used by browser automation. `src/automation/__init__.py` re-exports the public Chrome automation helpers.
+
+#### `src/automation/chrome.py`
 
 - `BrowserSession`: Dataclass that owns browser context resources.
 - `BrowserSession.close()`: Closes resources only when this process owns them.
@@ -290,9 +271,14 @@ Generic browser/CDP helpers used by browser automation.
 - `automation_chrome_pid()`: Finds the main Chrome process launched with the automation profile and CDP port.
 - `activate_process(pid)`: Activates one macOS process by PID through System Events.
 
+#### `src/automation/constants.py`
+
+- `DEFAULT_CDP_URL`: Chrome DevTools Protocol endpoint used by Playwright.
+- `CDP_BROWSER_PROFILE_MARKER`: Command-line marker used to find the dedicated automation Chrome process.
+
 ### `src/gpt/`
 
-ChatGPT-specific browser automation. `src/gpt/__init__.py` re-exports the public `submit_to_chatgpt()` function used by the app and smoke test.
+ChatGPT-specific browser automation and prompt construction. `src/gpt/__init__.py` re-exports `submit_to_chatgpt()` and `build_stream_prompt()`.
 
 #### `src/gpt/actions.py`
 
@@ -308,7 +294,34 @@ ChatGPT-specific browser automation. `src/gpt/__init__.py` re-exports the public
 - `wait_for_attachment_upload(page, timeout)`: Waits briefly for upload completion.
 - `find_prompt_box(page, timeout)`: Tries known ChatGPT composer selectors.
 
-### `src/camera.py`
+#### `src/gpt/prompts.py`
+
+- `build_stream_prompt(...)`: Builds the prompt sent to ChatGPT.
+- `speaker_hint_value(speaker_hint)`: Formats normalized voice confidence for the prompt.
+- `speaker_hint_similarity(speaker_hint)`: Formats raw cosine similarity for the prompt.
+- `speaker_hint_role(speaker_hint)`: Formats role hint for the prompt.
+
+#### `src/gpt/constants.py`
+
+- `STREAM_PROMPT`: System-style instruction sent on the first ChatGPT submission.
+- `PHOTO_CONTEXT_PROMPT`: Instruction inserted when a photo is attached.
+- ChatGPT URL, dark theme setting, and dedicated SecondVoice tab marker constants.
+
+### `src/vision/`
+
+Photo capture and upload-selection runtime. `src/vision/__init__.py` re-exports the public camera and photo helpers used by the app.
+
+#### `src/vision/photo.py`
+
+- `PhotoUploadTracker`: Mutable dataclass storing the last uploaded photo signature.
+- `start_photo_timer(stop_event, photo_mode)`: Starts periodic photo capture in a background thread.
+- `photo_capture_settings(photo_mode)`: Maps `test` and `live` modes to path, initial delay, and interval.
+- `capture_photos_on_interval(stop_event, photo_path, initial_seconds, interval_seconds)`: Captures photos until stopped.
+- `next_photo_upload(photo_mode, photo_tracker)`: Selects a photo only if it is available and changed.
+- `current_photo_signature(photo_path)`: Returns `(mtime_ns, size)` for a valid photo file.
+- `interview_photo_path(photo_mode)`: Maps `test` and `live` modes to their fixed photo paths; `none` returns no path.
+
+#### `src/vision/camera.py`
 
 macOS still-photo capture.
 
@@ -316,6 +329,11 @@ macOS still-photo capture.
 - `take_photo(output_path, camera_name)`: Uses `imagesnap` to capture one photo to a target path.
 - `parse_args()`: Defines standalone camera CLI flags.
 - `main()`: Captures one photo and prints the saved path.
+
+#### `src/vision/constants.py`
+
+- Photo paths and capture intervals.
+- Default camera name.
 
 ### `src/audio/constants.py`
 
@@ -332,16 +350,6 @@ Speech processing configuration.
 - ASR prompt terms: separate coding-interview and system-design vocabulary for terms like BFS, DFS, topological sort, idempotency, relational databases, consistency, queues, reliability, and common architecture phrases.
 - Endpointing: Ollama URL, model name, keep-alive, request timeout, labels, and semantic endpoint prompt.
 - Speaker ID: profile paths, model source, match threshold, and enrollment prompts.
-
-### `src/constants.py`
-
-App-level configuration values that do not clearly belong to audio or speech.
-
-Important groups:
-
-- Photo paths and capture intervals.
-- ChatGPT browser URL and CDP URL.
-- `STREAM_PROMPT`, the system-style instruction sent on the first ChatGPT submission.
 
 ### `src/logging_config.py`
 
@@ -514,4 +522,4 @@ Temporary state:
 ## Maintenance Notes
 
 - ChatGPT selectors in `src/gpt/actions.py` are intentionally defensive, but ChatGPT UI changes can still break submission or upload.
-- Photo paths are hard-coded for `/Users/flora/interview`; changing this should be centralized in `src/constants.py`.
+- Photo paths are hard-coded for `/Users/flora/interview`; changing this should be centralized in `src/vision/constants.py`.

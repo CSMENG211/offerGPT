@@ -3,7 +3,7 @@
 
 This module can be imported and used from other code, or run directly:
 
-    python src/camera.py
+    python src/vision/camera.py
 """
 
 import argparse
@@ -12,10 +12,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from constants import LIVE_INTERVIEW_PHOTO_PATH
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-
-DEFAULT_CAMERA_NAME = "FaceTime HD Camera"
+from vision.constants import DEFAULT_CAMERA_NAME, LIVE_INTERVIEW_PHOTO_PATH  # noqa: E402
 
 
 class CameraCaptureError(RuntimeError):

@@ -6,8 +6,8 @@ from typing import Literal
 
 from loguru import logger
 
-from camera import CameraCaptureError, take_photo
-from constants import (
+from vision.camera import CameraCaptureError, take_photo
+from vision.constants import (
     LIVE_INTERVIEW_PHOTO_PATH,
     LIVE_PHOTO_CAPTURE_INITIAL_SECONDS,
     LIVE_PHOTO_CAPTURE_INTERVAL_SECONDS,

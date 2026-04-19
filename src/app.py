@@ -19,7 +19,8 @@ from speech.constants import (
     DEFAULT_FINAL_TRANSCRIPTION_BACKEND,
     DEFAULT_FINAL_TRANSCRIPTION_MODEL,
 )
-from photo import (
+from gpt.prompts import build_stream_prompt
+from vision import (
     PhotoMode,
     PhotoUploadTracker,
     interview_photo_path,
@@ -27,7 +28,6 @@ from photo import (
     photo_capture_settings,
     start_photo_timer,
 )
-from prompts import build_stream_prompt
 from speech import (
     OllamaSemanticEndpointDetector,
     SpeakerHint,

@@ -4,8 +4,7 @@ import subprocess
 
 from loguru import logger
 
-
-CDP_BROWSER_PROFILE_MARKER = ".secondvoice/cdp-browser-profile"
+from automation.constants import CDP_BROWSER_PROFILE_MARKER
 
 
 @dataclass

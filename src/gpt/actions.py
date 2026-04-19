@@ -3,16 +3,15 @@ from time import sleep
 
 from loguru import logger
 
-from browser import activate_chrome, connect_to_cdp_browser
-from constants import (
+from automation import activate_chrome, connect_to_cdp_browser
+from automation.constants import DEFAULT_CDP_URL
+from gpt.constants import (
+    CHATGPT_COLOR_SCHEME,
     CHATGPT_URL,
-    DEFAULT_CDP_URL,
+    SECONDVOICE_BADGE_ID,
+    SECONDVOICE_CHATGPT_TAB_NAME,
+    SECONDVOICE_TITLE_PREFIX,
 )
-
-CHATGPT_COLOR_SCHEME = "dark"
-SECONDVOICE_CHATGPT_TAB_NAME = "secondvoice-chatgpt"
-SECONDVOICE_BADGE_ID = "secondvoice-tab-badge"
-SECONDVOICE_TITLE_PREFIX = "SecondVoice"
 
 
 def submit_to_chatgpt(
