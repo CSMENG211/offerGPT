@@ -34,7 +34,7 @@ it to ChatGPT:
 python main.py
 ```
 
-Recording starts automatically when speech begins. After 3 seconds of silence,
+Recording starts automatically when speech begins. After 10 seconds of silence,
 SecondVoice transcribes that segment, sends it to ChatGPT, and continues
 listening. ChatGPT classifies the segment as interviewer or interviewee.
 Interviewer segments are added to the problem context; interviewee segments get
@@ -80,18 +80,9 @@ python main.py
 ```
 
 The first time, ChatGPT may ask you to log in. The browser profile is stored at
-`~/.secondvoice/browser-profile`, so future runs can reuse that login.
+`~/.secondvoice/cdp-browser-profile`, so future runs can reuse that login.
 
-There are two browser modes:
-
-```sh
-python main.py --browser cdp
-python main.py --browser persistent
-```
-
-`cdp` is the default and connects to a Chrome instance that you start with
-remote debugging. `persistent` launches installed Chrome with a dedicated
-profile.
+SecondVoice connects to a Chrome instance that you start with remote debugging:
 
 ```sh
 open -na 'Google Chrome' --args \
@@ -102,7 +93,7 @@ open -na 'Google Chrome' --args \
 Then run:
 
 ```sh
-python main.py --browser cdp
+python main.py
 ```
 
 On macOS, your terminal may ask for microphone permission the first time this
