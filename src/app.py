@@ -61,7 +61,7 @@ def enroll_interviewee_voice() -> None:
             )
             audio_paths.append(audio_path)
 
-        identifier = SpeakerIdentifier()
+        identifier = SpeakerIdentifier(log_missing_profile=False)
         identifier.enroll_from_clips(audio_paths)
 
     logger.info("Saved interviewee voice embedding: {}", SPEAKER_PROFILE_EMBEDDING_PATH)
@@ -72,7 +72,7 @@ def stream_loop(options: RuntimeOptions) -> None:
     """Continuously capture interview segments and submit each segment for feedback."""
     is_first_submission = True
 
-    print_stream_mode_banner()
+    print_stream_mode_banner(options)
 
     with tempfile.TemporaryDirectory(prefix="secondvoice-eval-") as temp_dir:
         segment_queue: queue.Queue[Path | Exception] = queue.Queue()
@@ -228,13 +228,18 @@ def print_speaker_hint(speaker_hint: SpeakerHint) -> None:
     logger.info("Interviewee voice hint: {}", speaker_hint.log_value())
 
 
-def print_stream_mode_banner() -> None:
+def print_stream_mode_banner(options: RuntimeOptions) -> None:
     """Print the active stream-mode trigger settings."""
     logger.info("Stream mode is active.")
     logger.info("Audio start trigger: speech begins")
     logger.info("Segment trigger: {:g}s of silence", STREAM_SILENCE_SECONDS)
-    logger.info("Recording continues while segments are transcribed and submitted")
-    logger.info("Segment role detection: delegated to ChatGPT")
+    logger.info("Recording continues while segments are transcribed")
+    if options.ask_chatgpt:
+        logger.info("ChatGPT submission: enabled")
+        logger.info("Segment role detection: delegated to ChatGPT")
+    else:
+        logger.info("ChatGPT submission: disabled")
+        logger.info("Echo output: transcript plus interviewee voice confidence")
     logger.info("Press Ctrl+C to stop.")
 
 

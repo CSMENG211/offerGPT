@@ -41,7 +41,7 @@ class SpeakerHint:
 class SpeakerIdentifier:
     """Persistent interviewee voice enrollment and per-segment matching."""
 
-    def __init__(self) -> None:
+    def __init__(self, log_missing_profile: bool = True) -> None:
         self.classifier = None
         try:
             self.profile = self._load_profile()
@@ -49,12 +49,12 @@ class SpeakerIdentifier:
             logger.warning("Could not load interviewee voice profile: {}", error)
             self.profile = None
 
-        if self.profile is None:
+        if self.profile is not None:
+            logger.info("Loaded interviewee voice profile.")
+        elif log_missing_profile:
             logger.info(
                 "No interviewee voice profile found. Run with --enroll-me to enable voice hints."
             )
-        else:
-            logger.info("Loaded interviewee voice profile.")
 
     @property
     def has_profile(self) -> bool:

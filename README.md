@@ -40,7 +40,8 @@ listening. ChatGPT classifies the segment as interviewer or interviewee.
 Interviewer segments are added to the problem context; interviewee segments get
 an ideal response and evaluation against that ideal.
 
-To only print transcripts without sending them to ChatGPT:
+To only print transcripts and interviewee voice confidence without sending them
+to ChatGPT:
 
 ```sh
 python main.py --no-ask-chatgpt
@@ -54,7 +55,7 @@ Record your interviewee voice profile:
 python main.py --enroll-me
 ```
 
-SecondVoice will show up to 20 interview-style sentences. Read each sentence out
+SecondVoice will show 10 interview-style sentences. Read each sentence out
 loud using the same microphone and room you plan to use for mock interviews. The
 enrollment is saved locally in `~/.secondvoice` and reused until the next time
 you run `--enroll-me`, which replaces the previous profile.
