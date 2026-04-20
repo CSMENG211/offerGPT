@@ -88,7 +88,7 @@ class StreamSegmenter:
     def run(self) -> None:
         """Run the recorder loop until stopped, queueing completed segments."""
         self.start_semantic_worker()
-        logger.info("Audio stream active. Waiting for speech...")
+        logger.info("Audio stream active. Waiting for audio input...")
         try:
             try:
                 self.run_audio_stream()
@@ -168,7 +168,7 @@ class StreamSegmenter:
 
     def start_segment(self) -> None:
         """Start writing a new stream segment."""
-        logger.debug("Utterance started. Capturing audio...")
+        logger.info("Audio input detected. Listening...")
         self.segment_index += 1
         self.segment_path = self.output_dir / f"stream-segment-{self.segment_index:04d}.wav"
         self.wav_file = open_wav_writer(self.segment_path)
@@ -189,6 +189,7 @@ class StreamSegmenter:
         self.silent_blocks = 0
         self.semantic_check_queued_this_pause = False
         self.pre_roll.clear()
+        logger.info("Waiting for audio input...")
 
     def finish_segment(self) -> None:
         """Close and queue the current segment path."""

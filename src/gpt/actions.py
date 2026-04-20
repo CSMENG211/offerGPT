@@ -6,6 +6,8 @@ from loguru import logger
 from automation import activate_chrome, connect_to_cdp_browser
 from automation.constants import DEFAULT_CDP_URL
 from gpt.constants import (
+    CHATGPT_AUTO_SCROLL_INTERVAL_MS,
+    CHATGPT_AUTO_SCROLL_LIFETIME_MS,
     CHATGPT_COLOR_SCHEME,
     CHATGPT_URL,
     SECONDVOICE_BADGE_ID,
@@ -50,7 +52,10 @@ def submit_to_chatgpt(
                     return False
 
             fill_prompt(prompt_box, prompt)
+            scroll_to_bottom(page)
             submit_prompt(page, prompt_box, wait_for_upload=has_photo)
+            enable_auto_scroll_to_bottom(page)
+            scroll_to_bottom(page)
             logger.info("Submitted transcript to ChatGPT.")
             activate_chrome()
             return True
@@ -162,6 +167,104 @@ def stabilize_chatgpt_theme(page) -> None:
         )
     except Exception as exc:
         logger.debug("Could not stabilize ChatGPT theme: {}", exc)
+
+
+def enable_auto_scroll_to_bottom(page) -> None:
+    """Keep the ChatGPT conversation pinned to the newest content."""
+    try:
+        page.evaluate(
+            """
+            ({ intervalMs, lifetimeMs }) => {
+              const state = window.__secondvoiceAutoScroll;
+              if (state?.timer) {
+                window.clearInterval(state.timer);
+              }
+              if (state?.timeout) {
+                window.clearTimeout(state.timeout);
+              }
+              if (state?.observer) {
+                state.observer.disconnect();
+              }
+
+              const scrollToBottom = () => {
+                const containers = [
+                  document.scrollingElement,
+                  document.documentElement,
+                  document.body,
+                  document.querySelector("main"),
+                  document.querySelector("[role='main']"),
+                  ...document.querySelectorAll("div"),
+                ].filter((element) => {
+                  if (!element) {
+                    return false;
+                  }
+                  const style = window.getComputedStyle(element);
+                  const canScroll = /(auto|scroll)/.test(style.overflowY);
+                  return canScroll && element.scrollHeight > element.clientHeight + 8;
+                });
+
+                for (const element of containers) {
+                  element.scrollTop = element.scrollHeight;
+                }
+                window.scrollTo(0, document.body.scrollHeight);
+              };
+
+              const observer = new MutationObserver(scrollToBottom);
+              observer.observe(document.body, {
+                childList: true,
+                subtree: true,
+                characterData: true,
+              });
+
+              const stop = () => {
+                const current = window.__secondvoiceAutoScroll;
+                if (current?.observer) {
+                  current.observer.disconnect();
+                }
+                if (current?.timer) {
+                  window.clearInterval(current.timer);
+                }
+                if (current?.timeout) {
+                  window.clearTimeout(current.timeout);
+                }
+                delete window.__secondvoiceAutoScroll;
+              };
+
+              window.__secondvoiceAutoScroll = {
+                observer,
+                timer: window.setInterval(scrollToBottom, intervalMs),
+                timeout: window.setTimeout(stop, lifetimeMs),
+                scrollToBottom,
+                stop,
+              };
+              scrollToBottom();
+            }
+            """,
+            {
+                "intervalMs": CHATGPT_AUTO_SCROLL_INTERVAL_MS,
+                "lifetimeMs": CHATGPT_AUTO_SCROLL_LIFETIME_MS,
+            },
+        )
+    except Exception as exc:
+        logger.debug("Could not enable ChatGPT auto-scroll: {}", exc)
+
+
+def scroll_to_bottom(page) -> None:
+    """Nudge the ChatGPT page to the newest message immediately."""
+    try:
+        page.evaluate(
+            """
+            () => {
+              if (window.__secondvoiceAutoScroll?.scrollToBottom) {
+                window.__secondvoiceAutoScroll.scrollToBottom();
+                return;
+              }
+              window.scrollTo(0, document.body.scrollHeight);
+            }
+            """
+        )
+    except Exception as exc:
+        logger.debug("Could not scroll ChatGPT to the bottom: {}", exc)
 
 
 def fill_prompt(prompt_box, prompt: str) -> None:

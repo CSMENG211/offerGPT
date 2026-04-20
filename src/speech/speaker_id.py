@@ -120,11 +120,30 @@ class SpeakerIdentifier:
                         "then run enrollment again."
                     ) from error
 
+            source = self._classifier_source()
             self.classifier = EncoderClassifier.from_hparams(
-                source=SPEAKER_MODEL_SOURCE,
+                source=source,
                 savedir=str(SPEAKER_MODEL_DIR),
             )
         return self.classifier
+
+    def _classifier_source(self) -> str:
+        """Return a local SpeechBrain model path when the HF cache is warm."""
+        model_path = Path(SPEAKER_MODEL_SOURCE).expanduser()
+        if model_path.exists():
+            return str(model_path)
+
+        try:
+            from speech.transcription import cached_huggingface_snapshot_path
+
+            return cached_huggingface_snapshot_path(SPEAKER_MODEL_SOURCE)
+        except RuntimeError:
+            logger.warning(
+                "Speaker model {} is not available in the local Hugging Face cache; "
+                "SpeechBrain may try to download it.",
+                SPEAKER_MODEL_SOURCE,
+            )
+            return SPEAKER_MODEL_SOURCE
 
     def _load_profile(self):
         if not SPEAKER_PROFILE_EMBEDDING_PATH.exists():

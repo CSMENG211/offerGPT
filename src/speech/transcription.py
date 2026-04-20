@@ -125,10 +125,13 @@ class MlxWhisperTranscriber:
         """Store the configured MLX model name for lazy transcription."""
         self.model = model
         self._lock = threading.Lock()
-        logger.info(
-            "Configured mlx-whisper model {}. The first transcription may download model files.",
-            model,
-        )
+        if Path(model).expanduser().exists():
+            logger.info("Configured mlx-whisper model from local cache: {}", model)
+        else:
+            logger.info(
+                "Configured mlx-whisper model {}. The first transcription may download model files.",
+                model,
+            )
 
     def transcribe(self, audio_path: Path, *, log_progress: bool = True) -> str:
         """Transcribe a WAV file with mlx-whisper and return plain text."""

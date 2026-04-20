@@ -192,6 +192,7 @@ Audio capture, segmentation, WAV writing, and amplitude helpers. `src/audio/__in
 - `SemanticEndpointJob`: Draft chunk snapshot submitted from the recorder thread to the semantic worker.
 - `SemanticEndpointResult`: Completion decision sent from the semantic worker back to the recorder thread.
 - `StreamSegmenter`: Owns stream-recording mutable state, including open WAV file, segment index, pause index, silence counters, pre-roll, semantic queues, and segment finalization.
+- Stream logs announce idle/listening transitions: waiting for audio input, audio input detected, and waiting again after a segment is queued.
 - `stream_utterance_segments(...)`: Compatibility wrapper that creates a `StreamSegmenter` and runs it.
 - `run_semantic_endpoint_worker(...)`: Consumes semantic draft jobs, writes temporary draft WAVs, runs the detector, and publishes results without blocking microphone capture.
 
@@ -254,6 +255,7 @@ Interviewee voice enrollment and matching.
 - `SpeakerIdentifier.match(audio_path)`: Compares a segment embedding to the profile and returns a `SpeakerHint`.
 - `SpeakerIdentifier._encode(audio_path)`: Loads audio and returns a normalized embedding.
 - `SpeakerIdentifier._classifier()`: Lazily loads the SpeechBrain encoder model.
+- `SpeakerIdentifier._classifier_source()`: Resolves the SpeechBrain model from the local Hugging Face cache when available.
 - `SpeakerIdentifier._load_profile()`: Loads the saved embedding from disk.
 - `SpeakerIdentifier._save_metadata(clip_count)`: Writes voice-profile metadata JSON.
 - `SpeakerIdentifier._torch()`: Imports `torch` with a user-facing error if dependencies are missing.
@@ -287,6 +289,8 @@ ChatGPT-specific browser automation and prompt construction. `src/gpt/__init__.p
 - `is_secondvoice_chatgpt_page(page)`: Checks whether a ChatGPT tab has the SecondVoice tab marker.
 - `mark_secondvoice_chatgpt_page(page)`: Marks one ChatGPT tab as the dedicated SecondVoice automation tab and adds a visible title prefix plus in-page badge.
 - `stabilize_chatgpt_theme(page)`: Pins the automation page to the dark color scheme before submission.
+- `enable_auto_scroll_to_bottom(page)`: After a new prompt is submitted, installs a short-lived in-page timer and mutation observer that keep the ChatGPT conversation pinned to the newest prompt or response, then self-expire.
+- `scroll_to_bottom(page)`: Immediately nudges the ChatGPT page to the newest visible message.
 - `fill_prompt(prompt_box, prompt)`: Writes the prompt into the composer.
 - `submit_prompt(page, prompt_box, wait_for_upload)`: Sends the prompt by button click or Enter fallback.
 - `find_send_button(page)`: Tries known ChatGPT send-button selectors.
