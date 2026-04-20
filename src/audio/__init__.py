@@ -12,6 +12,7 @@ from audio.segmenter import (
     SemanticEndpointJob,
     SemanticEndpointResult,
     StreamSegmenter,
+    is_repetitive_transcript,
     run_semantic_endpoint_worker,
     stream_utterance_segments,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "create_pre_roll_buffer",
     "open_wav_writer",
     "rms_level",
+    "is_repetitive_transcript",
     "run_semantic_endpoint_worker",
     "stream_utterance_segments",
     "write_chunks",

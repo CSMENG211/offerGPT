@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 import queue
+import re
 import threading
 import wave
 
@@ -12,8 +13,8 @@ import sounddevice as sd
 from audio.levels import (
     audio_blocksize,
     block_count_for_seconds,
-    chunk_is_speech,
     create_pre_roll_buffer,
+    rms_level,
 )
 from audio.wav import open_wav_writer, write_wav_file
 from audio.constants import (
@@ -21,11 +22,14 @@ from audio.constants import (
     AUDIO_CHUNK_SECONDS,
     AUDIO_SAMPLE_RATE,
     DEFAULT_SILENCE_THRESHOLD,
+    STREAM_FALLBACK_NEW_WORD_THRESHOLD,
     STREAM_HARD_SILENCE_SECONDS,
     STREAM_SEMANTIC_SILENCE_SECONDS,
+    STREAM_SPEECH_CONTINUE_THRESHOLD_RATIO,
+    STREAM_SPEECH_HANGOVER_SECONDS,
 )
 
-SemanticEndpointDetector = Callable[[Path], bool]
+SemanticEndpointDetector = Callable[[Path], "SemanticEndpointResult"]
 
 
 @dataclass(frozen=True)
@@ -49,9 +53,56 @@ class SemanticEndpointJob:
 class SemanticEndpointResult:
     """Semantic completion result for one queued draft segment snapshot."""
 
-    segment_index: int
-    pause_index: int
     is_complete: bool
+    transcript: str = ""
+    is_gibberish: bool = False
+    segment_index: int = -1
+    pause_index: int = -1
+
+
+class StreamSpeechDetector:
+    """Speech activity detector with separate start/continue thresholds."""
+
+    def __init__(
+        self,
+        start_threshold: int,
+        continue_threshold_ratio: float = STREAM_SPEECH_CONTINUE_THRESHOLD_RATIO,
+        hangover_seconds: float = STREAM_SPEECH_HANGOVER_SECONDS,
+    ) -> None:
+        self.start_threshold = start_threshold
+        self.continue_threshold = start_threshold * continue_threshold_ratio
+        self.hangover_blocks = block_count_for_seconds(hangover_seconds)
+        self.hangover_blocks_left = 0
+        self.speech_started = False
+
+    def is_speech(self, chunk: bytes) -> bool:
+        """Return whether the chunk should count as speech for stream segmentation."""
+        level = rms_level(chunk)
+        if not self.speech_started:
+            if level >= self.start_threshold:
+                self.mark_speech()
+                return True
+            return False
+
+        if level >= self.continue_threshold:
+            self.mark_speech()
+            return True
+
+        if self.hangover_blocks_left > 0:
+            self.hangover_blocks_left -= 1
+            return True
+
+        return False
+
+    def mark_speech(self) -> None:
+        """Record speech activity and refresh hangover protection."""
+        self.speech_started = True
+        self.hangover_blocks_left = self.hangover_blocks
+
+    def reset(self) -> None:
+        """Reset detector state for a new segment."""
+        self.hangover_blocks_left = 0
+        self.speech_started = False
 
 
 class StreamSegmenter:
@@ -66,6 +117,7 @@ class StreamSegmenter:
         silence_threshold: int = DEFAULT_SILENCE_THRESHOLD,
         semantic_silence_seconds: float = STREAM_SEMANTIC_SILENCE_SECONDS,
         semantic_endpoint_detector: SemanticEndpointDetector | None = None,
+        fallback_new_word_threshold: int = STREAM_FALLBACK_NEW_WORD_THRESHOLD,
     ) -> None:
         self.output_dir = output_dir
         self.segment_queue = segment_queue
@@ -74,6 +126,8 @@ class StreamSegmenter:
         self.silence_threshold = silence_threshold
         self.semantic_silence_seconds = semantic_silence_seconds
         self.semantic_endpoint_detector = semantic_endpoint_detector
+        self.fallback_new_word_threshold = fallback_new_word_threshold
+        self.speech_detector = StreamSpeechDetector(silence_threshold)
 
         self.blocksize = audio_blocksize()
         self.hard_silence_blocks_needed = block_count_for_seconds(hard_silence_seconds)
@@ -91,6 +145,7 @@ class StreamSegmenter:
         self.wav_file: wave.Wave_write | None = None
         self.segment_path: Path | None = None
         self.pending_completion_reason = "shutdown"
+        self.latest_semantic_transcript = ""
 
         self.semantic_job_queue: queue.Queue[SemanticEndpointJob | None] | None = None
         self.semantic_result_queue: queue.Queue[SemanticEndpointResult] | None = None
@@ -152,7 +207,7 @@ class StreamSegmenter:
 
     def handle_audio_chunk(self, chunk: bytes) -> None:
         """Process one raw audio chunk."""
-        is_speech = chunk_is_speech(chunk, self.silence_threshold)
+        is_speech = self.speech_detector.is_speech(chunk)
 
         if not self.recording_started:
             self.pre_roll.append(chunk)
@@ -171,18 +226,7 @@ class StreamSegmenter:
             self.queue_semantic_endpoint_check()
 
         if self.silent_blocks >= self.hard_silence_blocks_needed:
-            silence_seconds = self.current_silence_seconds()
-            segment_seconds = self.current_segment_seconds()
-            logger.info(
-                "Audio segment fallback trigger: {:.1f}s silence since last "
-                "speech chunk; segment duration {:.1f}s.",
-                silence_seconds,
-                segment_seconds,
-            )
-            self.pending_completion_reason = (
-                f"{silence_seconds:.1f}s silence fallback"
-            )
-            self.finish_segment_and_reset()
+            self.handle_hard_silence_fallback()
 
     def start_segment(self) -> None:
         """Start writing a new stream segment."""
@@ -195,6 +239,7 @@ class StreamSegmenter:
         self.segment_chunks = len(self.pre_roll)
         self.silent_blocks = 0
         self.semantic_check_queued_this_pause = False
+        self.speech_detector.mark_speech()
 
     def finish_active_segment(self) -> None:
         """Queue the active segment during shutdown, if any."""
@@ -208,6 +253,7 @@ class StreamSegmenter:
         self.silent_blocks = 0
         self.semantic_check_queued_this_pause = False
         self.pre_roll.clear()
+        self.speech_detector.reset()
         logger.info("Waiting for audio input...")
 
     def finish_segment(self) -> None:
@@ -227,6 +273,7 @@ class StreamSegmenter:
         self.recorded_chunks = []
         self.segment_chunks = 0
         self.pending_completion_reason = "shutdown"
+        self.latest_semantic_transcript = ""
 
     def write_segment_chunks(self, chunks: Iterable[bytes]) -> None:
         """Write raw chunks into the current segment and snapshot buffer."""
@@ -262,6 +309,72 @@ class StreamSegmenter:
             not self.semantic_check_queued_this_pause
             and self.silent_blocks >= self.semantic_silence_blocks_needed
         )
+
+    def handle_hard_silence_fallback(self) -> None:
+        """Finish the segment unless endpoint ASR finds meaningful new words."""
+        silence_seconds = self.current_silence_seconds()
+        segment_seconds = self.current_segment_seconds()
+        logger.info(
+            "Audio segment fallback trigger: {:.1f}s silence since last "
+            "speech chunk; segment duration {:.1f}s.",
+            silence_seconds,
+            segment_seconds,
+        )
+
+        new_words = self.fallback_new_words()
+        if len(new_words) >= self.fallback_new_word_threshold:
+            logger.info(
+                "Audio segment fallback delayed: endpoint transcript gained {} new words.",
+                len(new_words),
+            )
+            logger.debug("Fallback new-word suffix: {}", " ".join(new_words))
+            self.semantic_pause_index += 1
+            self.silent_blocks = 0
+            self.semantic_check_queued_this_pause = False
+            self.speech_detector.mark_speech()
+            return
+
+        logger.info(
+            "Audio segment fallback accepted: no meaningful new words after {:.1f}s silence.",
+            silence_seconds,
+        )
+        self.pending_completion_reason = f"{silence_seconds:.1f}s silence fallback"
+        self.finish_segment_and_reset()
+
+    def fallback_new_words(self) -> list[str]:
+        """Return meaningful ASR tokens added since the latest semantic check."""
+        if self.semantic_endpoint_detector is None or not self.recorded_chunks:
+            return []
+
+        draft_path = self.output_dir / (
+            f"stream-segment-{self.segment_index:04d}-fallback-check.wav"
+        )
+        try:
+            write_wav_file(draft_path, self.recorded_chunks)
+            result = self.semantic_endpoint_detector(draft_path)
+        except Exception as error:
+            logger.warning("Fallback endpoint transcript check failed: {}", error)
+            return []
+        finally:
+            draft_path.unlink(missing_ok=True)
+
+        if result.is_gibberish:
+            logger.debug(
+                "Fallback endpoint transcript ignored as gibberish: {}",
+                result.transcript,
+            )
+            return []
+
+        if is_repetitive_transcript(result.transcript):
+            logger.debug(
+                "Fallback endpoint transcript ignored as repetitive: {}",
+                result.transcript,
+            )
+            return []
+
+        previous_transcript = self.latest_semantic_transcript
+        self.latest_semantic_transcript = result.transcript
+        return new_transcript_words(previous_transcript, result.transcript)
 
     def queue_semantic_endpoint_check(self) -> None:
         """Queue one semantic endpoint job for the current segment snapshot."""
@@ -305,6 +418,22 @@ class StreamSegmenter:
                 )
                 continue
 
+            if result.is_gibberish:
+                logger.debug(
+                    "Semantic endpoint transcript ignored as gibberish: {}",
+                    result.transcript,
+                )
+                continue
+
+            if is_repetitive_transcript(result.transcript):
+                logger.debug(
+                    "Semantic endpoint transcript ignored as repetitive: {}",
+                    result.transcript,
+                )
+                continue
+
+            self.latest_semantic_transcript = result.transcript
+
             if not result.is_complete:
                 logger.debug("Semantic endpoint check: incomplete; waiting for more speech.")
                 continue
@@ -335,6 +464,7 @@ def stream_utterance_segments(
     silence_threshold: int = DEFAULT_SILENCE_THRESHOLD,
     semantic_silence_seconds: float = STREAM_SEMANTIC_SILENCE_SECONDS,
     semantic_endpoint_detector: SemanticEndpointDetector | None = None,
+    fallback_new_word_threshold: int = STREAM_FALLBACK_NEW_WORD_THRESHOLD,
 ) -> None:
     """Continuously record voice-triggered utterance segments to WAV files."""
     StreamSegmenter(
@@ -345,6 +475,7 @@ def stream_utterance_segments(
         silence_threshold=silence_threshold,
         semantic_silence_seconds=semantic_silence_seconds,
         semantic_endpoint_detector=semantic_endpoint_detector,
+        fallback_new_word_threshold=fallback_new_word_threshold,
     ).run()
 
 
@@ -366,17 +497,83 @@ def run_semantic_endpoint_worker(
         )
         try:
             write_wav_file(draft_path, job.chunks)
-            is_complete = semantic_endpoint_detector(draft_path)
+            endpoint_result = semantic_endpoint_detector(draft_path)
         except Exception as error:
             logger.warning("Semantic endpoint check failed: {}", error)
-            is_complete = False
+            endpoint_result = SemanticEndpointResult(
+                is_complete=False,
+                segment_index=job.segment_index,
+                pause_index=job.pause_index,
+            )
         finally:
             draft_path.unlink(missing_ok=True)
 
         result_queue.put(
             SemanticEndpointResult(
+                is_complete=endpoint_result.is_complete,
+                transcript=endpoint_result.transcript,
+                is_gibberish=endpoint_result.is_gibberish,
                 segment_index=job.segment_index,
                 pause_index=job.pause_index,
-                is_complete=is_complete,
             )
         )
+
+
+def normalize_transcript_words(transcript: str) -> list[str]:
+    """Return lowercase word tokens for transcript comparison."""
+    return re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)?", transcript.lower())
+
+
+def is_repetitive_transcript(transcript: str) -> bool:
+    """Return whether a transcript looks like an ASR repetition loop."""
+    words = normalize_transcript_words(transcript)
+    return words_are_repetitive(words) or has_repetitive_suffix(words)
+
+
+def words_are_repetitive(words: list[str], min_tokens: int = 20) -> bool:
+    """Return whether the full token sequence looks repetitive."""
+    if len(words) < min_tokens:
+        return False
+
+    unique_ratio = len(set(words)) / len(words)
+    return unique_ratio <= 0.25 and max_ngram_coverage(words) >= 0.5
+
+
+def has_repetitive_suffix(words: list[str], min_suffix_tokens: int = 12) -> bool:
+    """Return whether a meaningful-looking transcript decays into a repeated suffix."""
+    for suffix_length in range(min_suffix_tokens, len(words) + 1):
+        suffix = words[-suffix_length:]
+        unique_ratio = len(set(suffix)) / len(suffix)
+        if unique_ratio <= 0.3 and max_ngram_coverage(suffix) >= 0.5:
+            return True
+    return False
+
+
+def max_ngram_coverage(words: list[str], ngram_size: int = 3) -> float:
+    """Return the largest repeated n-gram coverage ratio for the words."""
+    if len(words) < ngram_size:
+        return 0.0
+
+    counts: dict[tuple[str, ...], int] = {}
+    for index in range(len(words) - ngram_size + 1):
+        ngram = tuple(words[index : index + ngram_size])
+        counts[ngram] = counts.get(ngram, 0) + 1
+
+    return max(counts.values()) * ngram_size / len(words)
+
+
+def new_transcript_words(previous_transcript: str, current_transcript: str) -> list[str]:
+    """Return tokens added after the longest common prefix."""
+    if is_repetitive_transcript(current_transcript):
+        return []
+
+    previous_words = normalize_transcript_words(previous_transcript)
+    current_words = normalize_transcript_words(current_transcript)
+    common_prefix_length = 0
+
+    for previous_word, current_word in zip(previous_words, current_words):
+        if previous_word != current_word:
+            break
+        common_prefix_length += 1
+
+    return current_words[common_prefix_length:]

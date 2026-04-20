@@ -3,10 +3,15 @@ import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.error import URLError
 
 from loguru import logger
 
-from audio import CompletedStreamSegment, stream_utterance_segments
+from audio import (
+    CompletedStreamSegment,
+    is_repetitive_transcript,
+    stream_utterance_segments,
+)
 from audio.constants import (
     DEFAULT_SILENCE_THRESHOLD,
     STREAM_HARD_SILENCE_SECONDS,
@@ -29,10 +34,13 @@ from vision import (
     start_photo_timer,
 )
 from speech import (
+    DEFAULT_ENDPOINT_MODEL,
+    GIBBERISH_LABEL_GIBBERISH,
     OllamaSemanticEndpointDetector,
     SpeakerHint,
     SpeakerIdentifier,
     Transcriber,
+    classify_gibberish_transcript,
     create_transcriber,
     enroll_interviewee_voice,
     model_path_for_run,
@@ -143,7 +151,7 @@ def start_stream_recorder(
             STREAM_HARD_SILENCE_SECONDS,
             DEFAULT_SILENCE_THRESHOLD,
             STREAM_SEMANTIC_SILENCE_SECONDS,
-            semantic_endpoint_detector.is_complete,
+            semantic_endpoint_detector.detect,
         ),
     )
     recorder.start()
@@ -185,6 +193,14 @@ def process_stream_segment(
         logger.info("No speech detected. Listening again.")
         return False
 
+    if is_repetitive_transcript(transcript):
+        logger.info("Skipping transcript because it appears repetitive or garbled.")
+        return False
+
+    if is_gibberish_transcript(transcript):
+        logger.info("Skipping transcript because local model classified it as gibberish.")
+        return False
+
     if options.ask_chatgpt:
         logger.info(
             "Submitting to ChatGPT because segment ended by {}.",
@@ -204,6 +220,29 @@ def process_stream_segment(
             photo_tracker.last_signature = photo_signature
     logger.info("")
     return options.ask_chatgpt
+
+
+def is_gibberish_transcript(transcript: str) -> bool:
+    """Return whether the local model classifies the transcript as gibberish."""
+    try:
+        label, duration_ms = classify_gibberish_transcript(
+            transcript,
+            model=DEFAULT_ENDPOINT_MODEL,
+        )
+    except URLError as error:
+        logger.warning("Gibberish check could not reach Ollama: {}", error)
+        return False
+    except Exception as error:
+        logger.warning("Gibberish check failed: {}", error)
+        return False
+
+    logger.debug(
+        "Gibberish check: {} ({:.1f} ms) for final transcript: {}",
+        label,
+        duration_ms,
+        transcript,
+    )
+    return label == GIBBERISH_LABEL_GIBBERISH
 
 
 def build_speaker_hint(audio_path: Path, speaker_identifier: SpeakerIdentifier) -> SpeakerHint:

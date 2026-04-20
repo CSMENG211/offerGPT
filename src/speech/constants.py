@@ -73,6 +73,8 @@ OLLAMA_KEEP_ALIVE = "60m"
 OLLAMA_REQUEST_TIMEOUT_SECONDS = 10
 ENDPOINT_LABEL_COMPLETE = "COMPLETE"
 ENDPOINT_LABEL_INCOMPLETE = "INCOMPLETE"
+GIBBERISH_LABEL_MEANINGFUL = "MEANINGFUL"
+GIBBERISH_LABEL_GIBBERISH = "GIBBERISH"
 
 ENDPOINT_SYSTEM_PROMPT = (
     "You are an endpoint detector for live coding interview speech. "
@@ -92,4 +94,24 @@ ENDPOINT_SYSTEM_PROMPT = (
     "Transcript: I would use a hash map because lookup is constant time -> COMPLETE. "
     "Transcript: and then -> INCOMPLETE. "
     "Transcript: and then I move the left pointer -> COMPLETE."
+)
+
+GIBBERISH_SYSTEM_PROMPT = (
+    "You are an ASR transcript quality classifier for live interview speech. "
+    "Return exactly one word: MEANINGFUL or GIBBERISH. "
+    "GIBBERISH means repeated words, repeated short phrases, ASR hallucination "
+    "loops, filler loops, keyboard/noise artifacts, or text that does not "
+    "communicate interview content. "
+    "MEANINGFUL means the transcript contains understandable interview "
+    "instructions, candidate reasoning, questions, constraints, examples, "
+    "answers, or clarifications. "
+    "If a transcript starts meaningful but then decays into a long repeated "
+    "or hallucinated suffix, return GIBBERISH. "
+    "Do not mark normal short answers or normal disfluencies as gibberish. "
+    "Examples: Transcript: announce announce announce announce -> GIBBERISH. "
+    "Transcript: some new ones maybe new ones maybe new ones -> GIBBERISH. "
+    "Transcript: thank you for watching thank you for watching -> GIBBERISH. "
+    "Transcript: I would use a hash map to store complements -> MEANINGFUL. "
+    "Transcript: can I assume exactly one solution -> MEANINGFUL. "
+    "Transcript: yes yes yes -> MEANINGFUL."
 )

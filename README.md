@@ -91,18 +91,23 @@ it to ChatGPT:
 python main.py
 ```
 
-Recording starts automatically when speech begins. After 3 seconds of silence,
-SecondVoice queues a draft semantic check while microphone capture continues.
-A worker thread draft-transcribes the current audio and asks local Ollama
-`qwen2.5:1.5b` whether the thought is complete. If Ollama returns `COMPLETE`
-for the current pause, the segment ends early. If it returns `INCOMPLETE`, is
-unavailable, returns anything unexpected, or the result becomes stale because
-you resumed speaking, SecondVoice keeps listening until the 10-second hard
-silence fallback. Once a segment ends, SecondVoice transcribes that segment,
-sends it to ChatGPT, and continues listening. ChatGPT classifies the segment as
-interviewer or interviewee. Interviewer segments are added to the problem
-context; interviewee segments get an ideal response and evaluation against that
-ideal.
+Recording starts automatically when speech crosses the normal RMS threshold.
+Once a segment is active, SecondVoice uses a lower continuation threshold plus a
+short hangover so quiet words and tiny gaps do not immediately count as
+silence. After 2.5 seconds of silence, SecondVoice queues a draft semantic
+check while microphone capture continues. A worker thread draft-transcribes the
+current audio and asks local Ollama `qwen2.5:1.5b` whether the thought is
+complete. If Ollama returns `COMPLETE` for the current pause, the segment ends
+early. If it returns `INCOMPLETE`, is unavailable, returns anything unexpected,
+or the result becomes stale because you resumed speaking, SecondVoice keeps
+listening until the 7.5-second hard silence fallback. Before accepting that
+fallback, it runs one endpoint transcript check and keeps listening if the
+transcript gained meaningful new words since the last semantic check. Repeated
+ASR loops and transcripts classified as gibberish by the local model are
+ignored during fallback checks and skipped before ChatGPT submission. Once a
+segment ends, SecondVoice transcribes that segment, sends it to ChatGPT, and
+continues listening. ChatGPT privately infers whether the segment is interviewer
+or interviewee and returns brief live coaching.
 
 The semantic endpoint detector expects Ollama to be running locally with
 `qwen2.5:1.5b` available.
