@@ -11,14 +11,10 @@ def build_stream_prompt(
     """Return a prompt that asks ChatGPT to evaluate an interview transcript segment."""
     photo_context = f"\n{PHOTO_CONTEXT_PROMPT}\n" if include_photo_context else ""
     segment_prompt = (
-        "Classify and process this transcript segment.\n\n"
+        "Process this transcript segment using the private speaker-classification rules.\n\n"
         f"Local voice role hint: {speaker_hint_role(speaker_hint)}\n"
         f"Enrolled interviewee voice match confidence: {speaker_hint_value(speaker_hint)}\n"
         f"Raw voice cosine similarity: {speaker_hint_similarity(speaker_hint)}\n"
-        "Voice hint interpretation: confidence is a bounded normalization of cosine "
-        "similarity, not a probability or ground truth. Higher values suggest the "
-        "audio sounds more like the enrolled interviewee; lower values suggest "
-        "interviewer or unknown. Treat it as weaker than transcript/context.\n"
         f"{photo_context}\n"
         f"Transcript:\n{transcript}"
     )
