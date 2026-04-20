@@ -3,7 +3,7 @@
 SecondVoice is a voice-triggered mock interview evaluator.
 
 It captures audio from your microphone, transcribes it locally with
-faster-whisper, and sends each transcript segment to ChatGPT for role
+mlx-whisper, and sends each transcript segment to ChatGPT for role
 classification, context tracking, and answer feedback.
 
 ### Install
@@ -58,9 +58,10 @@ python main.py
 By default, SecondVoice streams continuously and submits transcript segments to
 ChatGPT.
 
-SecondVoice uses a fast `faster-whisper` model for draft semantic endpoint
-checks and an `mlx-whisper` model for final completed-segment transcription on
-Apple Silicon. These backends and model names are configured in
+SecondVoice currently uses `mlx-whisper` `base.en` for draft semantic endpoint
+checks and `mlx-whisper` `small.en` for final completed-segment transcription on
+Apple Silicon. This keeps the endpoint path faster while preserving final
+transcript quality. These backends and model names are configured in
 `src/speech/constants.py`.
 
 For `--no-ask`, MLX model names are resolved through Hugging Face so the local

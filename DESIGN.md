@@ -7,7 +7,7 @@ The application is intentionally small and file-oriented. `main.py` handles comm
 ## Goals
 
 - Capture mock-interview speech with minimal manual control.
-- Keep transcription local through `faster-whisper`.
+- Keep transcription local through `mlx-whisper` by default.
 - Preserve interviewer context across ChatGPT submissions by sending an initial mode prompt and then incremental transcript segments.
 - Help ChatGPT distinguish interviewer and interviewee speech with an optional enrolled voice hint.
 - Add visual problem-board context through test or live camera photos when enabled.
@@ -237,8 +237,8 @@ Local transcription backend interface and implementations.
 - `create_transcriber(backend, model)`: Factory that returns the configured backend implementation.
 - `model_path_for_run(backend, model, use_local_cache)`: Uses repo names directly for refresh/test runs, but resolves MLX Hugging Face repo names to local cached snapshot paths for normal ChatGPT runs.
 - `cached_huggingface_snapshot_path(repo_id)`: Finds the newest local Hugging Face cache snapshot for an MLX model without refreshing metadata.
-- `FasterWhisperTranscriber`: Loads and runs `faster-whisper`, currently used for fast draft endpoint transcription.
-- `MlxWhisperTranscriber`: Runs `mlx-whisper`, currently used for final completed-segment transcription on Apple Silicon.
+- `FasterWhisperTranscriber`: Loads and runs `faster-whisper`, available for benchmark comparisons and alternate endpoint experiments.
+- `MlxWhisperTranscriber`: Runs `mlx-whisper`, currently using `base.en` for draft endpoint transcription and `small.en` for final completed-segment transcription on Apple Silicon.
 - `transcribe(audio_path)`: Backend implementations transcribe a WAV file with the coding-interview and system-design initial prompt where supported, then return joined plain text. Calls are serialized per transcriber instance.
 
 #### `src/speech/speaker_id.py`
@@ -487,7 +487,8 @@ The semantic worker never mutates recorder-owned state. It does not close segmen
 ## External Dependencies
 
 - `sounddevice`: microphone input.
-- `faster-whisper`: local transcription.
+- `mlx-whisper`: default local transcription backend.
+- `faster-whisper`: alternate local transcription backend for benchmark comparisons and experiments.
 - `speechbrain`, `torch`, `torchaudio`: voice embedding and matching.
 - `playwright`: ChatGPT browser automation.
 - `loguru`: structured console and file logging.
