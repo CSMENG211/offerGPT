@@ -142,6 +142,256 @@ Microphone
   -> ~/.secondvoice voice profile files
 ```
 
+## Stream Boundary Pipeline
+
+`StreamSegmenter` is the only owner of active recording state. It decides when a segment starts, when a segment ends, and what completion reason is attached to the queued WAV.
+
+### 1. Speech Activity
+
+Recording starts when RMS audio crosses `DEFAULT_SILENCE_THRESHOLD`. Once a segment is active, `StreamSpeechDetector` uses a lower continuation threshold plus a short hangover so quiet syllables and tiny gaps do not immediately count as silence.
+
+### 2. Transcript Cleanup
+
+Cleanup is deterministic. There is no local LLM gibberish classifier. `trim_repetitive_transcript_suffix(...)` removes only trailing ASR repetition loops while preserving useful prefixes; fully repetitive transcripts become empty and are skipped. The suffix detector uses low vocabulary diversity as the main signal, with repeated bigram and trigram coverage as supporting signals, so variant loops do not have to repeat the exact same three-word phrase.
+
+Cleanup runs in three places:
+
+- semantic endpoint drafts, before the `COMPLETE`/`INCOMPLETE` prompt
+- hard-fallback transcript comparison, before counting new words
+- final completed-segment transcripts, before ChatGPT submission
+
+### 3. Semantic Endpoint Check
+
+After `STREAM_SEMANTIC_SILENCE_SECONDS`, currently 2.5 seconds, the recorder copies the current chunks into a `SemanticEndpointJob` and keeps reading microphone input. A semantic worker thread writes a temporary WAV, runs the fast endpoint transcriber, applies transcript cleanup, and asks Ollama `qwen2.5:1.5b` whether the cleaned transcript is `COMPLETE` or `INCOMPLETE`.
+
+The recorder accepts only current results. Each job/result carries `segment_index` and `pause_index`; if the speaker resumed, a newer pause began, or the segment already ended, the old result is stale and ignored. Anything other than a current `COMPLETE` result keeps recording active.
+
+### 4. Hard Fallback Guard
+
+If no semantic endpoint is accepted, the recorder reaches `STREAM_HARD_SILENCE_SECONDS`, currently 7.5 seconds. Before cutting, it queues a fallback-check snapshot to the semantic worker and keeps reading microphone input. When the worker result returns, the recorder compares the cleaned endpoint transcript to the latest semantic transcript. If it gained at least `STREAM_FALLBACK_NEW_WORD_THRESHOLD`, currently 3, normalized words, fallback is delayed and listening continues. Otherwise the segment is queued with a silence-fallback completion reason.
+
+## Threading Model
+
+Stream mode uses the main thread for final transcription, voice matching, prompt construction, and browser submission. Audio capture runs in a background thread so recording can continue while segments are processed. The semantic endpoint worker runs separately so draft Whisper and Ollama latency cannot block microphone reads. Photo capture can run in a second background thread for `test` and `live` modes.
+
+Communication between the recorder and main thread is via `queue.Queue[CompletedStreamSegment | Exception]`. Completed segments carry the WAV path and completion reason. Recorder failures are queued as exceptions and re-raised by `next_stream_segment()`.
+
+Shutdown is coordinated with a shared `threading.Event`. `KeyboardInterrupt` sets the event, joins background threads, and logs completion.
+
+## Audio Queue Design
+
+Audio recording has two separate queue-based handoffs. They both involve the recorder thread, but they solve different problems.
+
+### Completed Segment Queue
+
+The completed segment queue connects the recorder thread to the main app thread.
+
+```text
+Recorder thread
+  captures microphone audio
+  decides a segment is finished
+  closes the segment WAV
+  puts the WAV path into segment_queue
+        |
+        v
+Main app thread
+  reads segment_queue
+  runs final transcription
+  runs speaker matching
+  prints or submits the segment
+```
+
+This queue carries finished work. Its items are either `CompletedStreamSegment` objects or recorder exceptions. A completed segment includes the WAV path plus the trigger that ended it, such as semantic completion, silence fallback, or shutdown. The recorder should not do final transcription, speaker matching, prompt construction, or browser automation because those operations are slower than real-time microphone capture.
+
+### Semantic Endpoint Queues
+
+Semantic endpointing uses a second queue pair inside the audio layer.
+
+```text
+Recorder thread
+  keeps reading microphone audio
+  after a 2.5-second pause, copies the current chunks
+  puts SemanticEndpointJob into semantic_job_queue
+  at hard fallback, queues a fallback-check SemanticEndpointJob
+        |
+        v
+Semantic worker thread
+  writes a temporary draft WAV
+  runs fast Whisper draft transcription
+  asks Ollama COMPLETE vs INCOMPLETE
+  puts SemanticEndpointResult into semantic_result_queue
+        |
+        v
+Recorder thread
+  polls semantic_result_queue without blocking
+  cuts the segment only if the current result is COMPLETE
+  applies fallback-check results before accepting hard fallback
+```
+
+This queue pair carries draft work. It exists so Whisper and Ollama latency cannot block `sounddevice.RawInputStream.read()`. Blocking the recorder thread during endpoint detection can let the microphone input buffer overflow, which may drop audio samples.
+
+Each semantic job/result includes a `segment_index`, `pause_index`, and purpose (`semantic` or `fallback`). The recorder accepts a result only when both IDs still match the current in-progress segment. This prevents stale results from cutting audio after the speaker resumes talking, after a newer pause begins, or after the hard fallback has already ended the segment.
+
+This means SecondVoice may sometimes avoid cutting a segment that was complete at an earlier pause. For example, if a semantic job is queued after `"I would sort the array first"` but the speaker resumes with `"then I would use two pointers"` before the worker returns, the old result is ignored even if it says `COMPLETE`. The tradeoff is intentional: a slightly later cut or larger segment is better than letting stale information split resumed speech in the middle of a continuing answer.
+
+## Timeline Examples
+
+These examples use `segment_index=5` and start with `pause_index=10`. Times are illustrative; the recorder always uses chunk counts derived from the configured durations.
+
+### Semantic Completion
+
+If the speaker stays silent after the first semantic check, an early cut can happen before the 7.5-second fallback.
+
+```text
+t+0.0  silence starts
+t+2.5  semantic job queued for segment 5, pause 10, purpose semantic
+t+3.0  semantic result returns COMPLETE for segment 5, pause 10, purpose semantic
+t+3.0  recorder accepts the current result and cuts the segment
+```
+
+### Stale Semantic Result
+
+If the speaker resumes before the semantic result returns, the old result is stale and ignored.
+
+```text
+t+0.0  silence starts
+t+2.5  semantic job queued for segment 5, pause 10, purpose semantic
+t+2.6  speaker resumes; recorder increments pause_index to 11
+t+4.0  old semantic result returns COMPLETE for segment 5, pause 10, purpose semantic
+t+4.0  recorder ignores the stale result
+```
+
+### New Pause After Resume
+
+If the speaker pauses again after resuming, the recorder queues a new semantic check for the new pause.
+
+```text
+t+0.0  first silence starts
+t+2.5  semantic job queued for segment 5, pause 10, purpose semantic
+t+2.6  speaker resumes; recorder increments pause_index to 11
+t+4.0  old result for pause 10 is ignored as stale
+t+5.0  second silence starts
+t+7.5  semantic job queued for segment 5, pause 11, purpose semantic
+```
+
+The 7.5-second hard fallback is counted from the current continuous silence. In this example, if no current semantic result is accepted, fallback would be considered around `t+12.5`, not `t+7.5`, because speech resumed at `t+2.6`.
+
+### Fallback Accepted
+
+If the current pause reaches the hard fallback and the fallback transcript has no meaningful new words, the recorder queues the segment after the worker result returns.
+
+```text
+t+0.0  silence starts
+t+2.5  semantic job queued for segment 5, pause 10, purpose semantic
+t+3.0  semantic result returns INCOMPLETE for segment 5, pause 10, purpose semantic
+t+7.5  fallback job queued for segment 5, pause 10, purpose fallback
+t+8.0  fallback result returns transcript matching the latest semantic transcript
+t+8.0  recorder accepts fallback and queues the segment
+```
+
+The recorder keeps reading microphone audio between `t+7.5` and `t+8.0`; fallback endpointing does not block `RawInputStream.read()`.
+
+### Fallback Delayed
+
+If the fallback transcript gained enough meaningful new words, the recorder treats the silence as untrustworthy and keeps listening.
+
+```text
+t+0.0  silence starts
+t+2.5  semantic job queued for segment 5, pause 10, purpose semantic
+t+3.0  semantic result returns INCOMPLETE with transcript "hello world"
+t+7.5  fallback job queued for segment 5, pause 10, purpose fallback
+t+8.0  fallback result returns "hello world from google today"
+t+8.0  new-word suffix is "from google today" (3 words)
+t+8.0  recorder delays fallback, clears silence, increments pause_index to 11
+```
+
+### Stale Fallback Result
+
+Fallback results use the same stale-result guard as semantic endpoint results.
+
+```text
+t+0.0  silence starts
+t+7.5  fallback job queued for segment 5, pause 10, purpose fallback
+t+7.6  speaker resumes; recorder increments pause_index to 11
+t+8.2  fallback result returns for segment 5, pause 10, purpose fallback
+t+8.2  recorder ignores the stale fallback result
+```
+
+### Repeated Tail Cleanup
+
+Cleanup happens before semantic classification, fallback new-word comparison, and final submission.
+
+```text
+raw transcript:
+  "Given an array, I would use a hash map maybe new ones maybe new ones maybe new ones"
+
+trimmed transcript:
+  "Given an array, I would use a hash map"
+
+effect:
+  fallback comparison and ChatGPT submission use the trimmed transcript
+```
+
+### Fully Repetitive Transcript
+
+Fully repetitive transcripts become empty after cleanup and are treated as rejected transcript results.
+
+```text
+raw transcript:
+  "maybe new ones maybe new ones maybe new ones maybe new ones"
+
+trimmed transcript:
+  ""
+
+effect:
+  semantic completion is not accepted
+  fallback sees no meaningful new words
+  final submission skips the segment
+```
+
+The semantic worker never mutates recorder-owned state. It does not close segment files, clear buffers, or decide final boundaries directly. The recorder remains the single owner of mutable recording state and the only code path that calls `finish_segment()`.
+
+## External Dependencies
+
+- `sounddevice`: microphone input.
+- `mlx-whisper`: default local transcription backend.
+- `faster-whisper`: alternate local transcription backend for benchmark comparisons and experiments.
+- `speechbrain`, `torch`, `torchaudio`: voice embedding and matching.
+- `playwright`: ChatGPT browser automation.
+- `loguru`: structured console and file logging.
+- `imagesnap`: external macOS command for named-camera still capture.
+- Google Chrome with remote debugging enabled for the default browser submission path. The real stream path expects this CDP browser to already be running; the smoke test opens it on macOS if it is missing.
+
+## Persistent and Temporary State
+
+Persistent state:
+
+- `python.log`: debug log in the current working directory.
+- `~/.secondvoice/interviewee-voice-embedding.pt`: enrolled interviewee embedding.
+- `~/.secondvoice/interviewee-voice-profile.json`: metadata for the enrolled voice profile.
+- `~/.secondvoice/cdp-browser-profile`: recommended Chrome profile for reusable ChatGPT login.
+- `/Users/flora/interview/test.jpg`, `live.jpg`: main app photo-context inputs.
+- `/Users/flora/interview/static.jpg`: fixed photo fixture for `scripts/test_chatgpt_submit.py`.
+
+Temporary state:
+
+- Stream WAV segments are created in a `secondvoice-eval-*` temporary directory and deleted after transcription.
+- Enrollment WAV clips are created in a `secondvoice-enroll-*` temporary directory and discarded after profile creation.
+
+## Error Handling
+
+- Missing voice profile does not stop streaming; the prompt receives an unavailable speaker hint.
+- Voice-matching dependency failures are logged and converted into an unknown speaker hint during streaming.
+- Recorder-thread exceptions are passed through the queue and raised on the main thread.
+- Missing or unchanged photos result in text-only ChatGPT submissions.
+- Camera capture failures are logged as warnings during periodic capture.
+- Browser connection or prompt-box failures stop the run with actionable setup guidance.
+
+## Maintenance Notes
+
+- ChatGPT selectors in `src/gpt/actions.py` are intentionally defensive, but ChatGPT UI changes can still break submission or upload.
+- Photo paths are hard-coded for `/Users/flora/interview`; changing this should be centralized in `src/vision/constants.py`.
+
 ## File and Method Reference
 
 ### `main.py`
@@ -393,172 +643,3 @@ Local transcription backend benchmark harness.
 
 - `main()`: Creates one configured transcriber and runs it against one or more WAV files.
 - `parse_args()`: Accepts audio paths plus optional backend/model overrides so `faster-whisper` and `mlx-whisper` models can be compared without changing the live app.
-
-## Stream Boundary Pipeline
-
-`StreamSegmenter` is the only owner of active recording state. It decides when a segment starts, when a segment ends, and what completion reason is attached to the queued WAV.
-
-### 1. Speech Activity
-
-Recording starts when RMS audio crosses `DEFAULT_SILENCE_THRESHOLD`. Once a segment is active, `StreamSpeechDetector` uses a lower continuation threshold plus a short hangover so quiet syllables and tiny gaps do not immediately count as silence.
-
-### 2. Transcript Cleanup
-
-Cleanup is deterministic. There is no local LLM gibberish classifier. `trim_repetitive_transcript_suffix(...)` removes only trailing ASR repetition loops while preserving useful prefixes; fully repetitive transcripts become empty and are skipped. The suffix detector uses low vocabulary diversity as the main signal, with repeated bigram and trigram coverage as supporting signals, so variant loops do not have to repeat the exact same three-word phrase.
-
-Cleanup runs in three places:
-
-- semantic endpoint drafts, before the `COMPLETE`/`INCOMPLETE` prompt
-- hard-fallback transcript comparison, before counting new words
-- final completed-segment transcripts, before ChatGPT submission
-
-### 3. Semantic Endpoint Check
-
-After `STREAM_SEMANTIC_SILENCE_SECONDS`, currently 2.5 seconds, the recorder copies the current chunks into a `SemanticEndpointJob` and keeps reading microphone input. A semantic worker thread writes a temporary WAV, runs the fast endpoint transcriber, applies transcript cleanup, and asks Ollama `qwen2.5:1.5b` whether the cleaned transcript is `COMPLETE` or `INCOMPLETE`.
-
-The recorder accepts only current results. Each job/result carries `segment_index` and `pause_index`; if the speaker resumed, a newer pause began, or the segment already ended, the old result is stale and ignored. Anything other than a current `COMPLETE` result keeps recording active.
-
-### 4. Hard Fallback Guard
-
-If no semantic endpoint is accepted, the recorder reaches `STREAM_HARD_SILENCE_SECONDS`, currently 7.5 seconds. Before cutting, it queues a fallback-check snapshot to the semantic worker and keeps reading microphone input. When the worker result returns, the recorder compares the cleaned endpoint transcript to the latest semantic transcript. If it gained at least `STREAM_FALLBACK_NEW_WORD_THRESHOLD`, currently 3, normalized words, fallback is delayed and listening continues. Otherwise the segment is queued with a silence-fallback completion reason.
-
-## Threading Model
-
-Stream mode uses the main thread for final transcription, voice matching, prompt construction, and browser submission. Audio capture runs in a background thread so recording can continue while segments are processed. The semantic endpoint worker runs separately so draft Whisper and Ollama latency cannot block microphone reads. Photo capture can run in a second background thread for `test` and `live` modes.
-
-Communication between the recorder and main thread is via `queue.Queue[CompletedStreamSegment | Exception]`. Completed segments carry the WAV path and completion reason. Recorder failures are queued as exceptions and re-raised by `next_stream_segment()`.
-
-Shutdown is coordinated with a shared `threading.Event`. `KeyboardInterrupt` sets the event, joins background threads, and logs completion.
-
-## Audio Queue Design
-
-Audio recording has two separate queue-based handoffs. They both involve the recorder thread, but they solve different problems.
-
-### Completed Segment Queue
-
-The completed segment queue connects the recorder thread to the main app thread.
-
-```text
-Recorder thread
-  captures microphone audio
-  decides a segment is finished
-  closes the segment WAV
-  puts the WAV path into segment_queue
-        |
-        v
-Main app thread
-  reads segment_queue
-  runs final transcription
-  runs speaker matching
-  prints or submits the segment
-```
-
-This queue carries finished work. Its items are either `CompletedStreamSegment` objects or recorder exceptions. A completed segment includes the WAV path plus the trigger that ended it, such as semantic completion, silence fallback, or shutdown. The recorder should not do final transcription, speaker matching, prompt construction, or browser automation because those operations are slower than real-time microphone capture.
-
-### Semantic Endpoint Queues
-
-Semantic endpointing uses a second queue pair inside the audio layer.
-
-```text
-Recorder thread
-  keeps reading microphone audio
-  after a 2.5-second pause, copies the current chunks
-  puts SemanticEndpointJob into semantic_job_queue
-  at hard fallback, queues a fallback-check SemanticEndpointJob
-        |
-        v
-Semantic worker thread
-  writes a temporary draft WAV
-  runs fast Whisper draft transcription
-  asks Ollama COMPLETE vs INCOMPLETE
-  puts SemanticEndpointResult into semantic_result_queue
-        |
-        v
-Recorder thread
-  polls semantic_result_queue without blocking
-  cuts the segment only if the current result is COMPLETE
-  applies fallback-check results before accepting hard fallback
-```
-
-This queue pair carries draft work. It exists so Whisper and Ollama latency cannot block `sounddevice.RawInputStream.read()`. Blocking the recorder thread during endpoint detection can let the microphone input buffer overflow, which may drop audio samples.
-
-Each semantic job/result includes a `segment_index`, `pause_index`, and purpose (`semantic` or `fallback`). The recorder accepts a result only when both IDs still match the current in-progress segment. This prevents stale results from cutting audio after the speaker resumes talking, after a newer pause begins, or after the hard fallback has already ended the segment.
-
-This means SecondVoice may sometimes avoid cutting a segment that was complete at an earlier pause. For example, if a semantic job is queued after `"I would sort the array first"` but the speaker resumes with `"then I would use two pointers"` before the worker returns, the old result is ignored even if it says `COMPLETE`. The tradeoff is intentional: a slightly later cut or larger segment is better than letting stale information split resumed speech in the middle of a continuing answer.
-
-### Semantic Timeline Examples
-
-If the speaker stays silent after the first semantic check, an early cut can happen before the 7.5-second fallback:
-
-```text
-t+0.0  silence starts
-t+2.5  semantic job queued for segment 5, pause 10
-t+3.0  semantic result returns COMPLETE for segment 5, pause 10
-t+3.0  recorder accepts the current result and cuts the segment
-```
-
-If the speaker resumes before the semantic result returns, the old result is stale and ignored:
-
-```text
-t+0.0  silence starts
-t+2.5  semantic job queued for segment 5, pause 10
-t+2.6  speaker resumes; recorder increments pause_index to 11
-t+4.0  old semantic result returns COMPLETE for segment 5, pause 10
-t+4.0  recorder ignores the stale result
-```
-
-If the speaker pauses again after resuming, the recorder queues a new semantic check for the new pause:
-
-```text
-t+0.0  first silence starts
-t+2.5  semantic job queued for segment 5, pause 10
-t+2.6  speaker resumes; recorder increments pause_index to 11
-t+4.0  old result for pause 10 is ignored as stale
-t+5.0  second silence starts
-t+7.5  semantic job queued for segment 5, pause 11
-```
-
-The 7.5-second hard fallback is also counted from the current continuous silence. In the last example, if no current semantic result is accepted, fallback would happen around `t+12.5`, not `t+7.5`, because speech resumed at `t+2.6`.
-
-The semantic worker never mutates recorder-owned state. It does not close segment files, clear buffers, or decide final boundaries directly. The recorder remains the single owner of mutable recording state and the only code path that calls `finish_segment()`.
-
-## External Dependencies
-
-- `sounddevice`: microphone input.
-- `mlx-whisper`: default local transcription backend.
-- `faster-whisper`: alternate local transcription backend for benchmark comparisons and experiments.
-- `speechbrain`, `torch`, `torchaudio`: voice embedding and matching.
-- `playwright`: ChatGPT browser automation.
-- `loguru`: structured console and file logging.
-- `imagesnap`: external macOS command for named-camera still capture.
-- Google Chrome with remote debugging enabled for the default browser submission path. The real stream path expects this CDP browser to already be running; the smoke test opens it on macOS if it is missing.
-
-## Persistent and Temporary State
-
-Persistent state:
-
-- `python.log`: debug log in the current working directory.
-- `~/.secondvoice/interviewee-voice-embedding.pt`: enrolled interviewee embedding.
-- `~/.secondvoice/interviewee-voice-profile.json`: metadata for the enrolled voice profile.
-- `~/.secondvoice/cdp-browser-profile`: recommended Chrome profile for reusable ChatGPT login.
-- `/Users/flora/interview/test.jpg`, `live.jpg`: main app photo-context inputs.
-- `/Users/flora/interview/static.jpg`: fixed photo fixture for `scripts/test_chatgpt_submit.py`.
-
-Temporary state:
-
-- Stream WAV segments are created in a `secondvoice-eval-*` temporary directory and deleted after transcription.
-- Enrollment WAV clips are created in a `secondvoice-enroll-*` temporary directory and discarded after profile creation.
-
-## Error Handling
-
-- Missing voice profile does not stop streaming; the prompt receives an unavailable speaker hint.
-- Voice-matching dependency failures are logged and converted into an unknown speaker hint during streaming.
-- Recorder-thread exceptions are passed through the queue and raised on the main thread.
-- Missing or unchanged photos result in text-only ChatGPT submissions.
-- Camera capture failures are logged as warnings during periodic capture.
-- Browser connection or prompt-box failures stop the run with actionable setup guidance.
-
-## Maintenance Notes
-
-- ChatGPT selectors in `src/gpt/actions.py` are intentionally defensive, but ChatGPT UI changes can still break submission or upload.
-- Photo paths are hard-coded for `/Users/flora/interview`; changing this should be centralized in `src/vision/constants.py`.
