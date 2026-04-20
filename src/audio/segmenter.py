@@ -48,6 +48,7 @@ class SemanticEndpointJob:
     segment_index: int
     pause_index: int
     chunks: list[bytes]
+    purpose: str = "semantic"
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ class SemanticEndpointResult:
     is_rejected: bool = False
     segment_index: int = -1
     pause_index: int = -1
+    purpose: str = "semantic"
 
 
 @dataclass(frozen=True)
@@ -149,6 +151,7 @@ class StreamSegmenter:
         self.segment_chunks = 0
         self.silent_blocks = 0
         self.semantic_check_queued_this_pause = False
+        self.fallback_check_queued_this_pause = False
         self.semantic_pause_index = 0
         self.recording_started = False
         self.segment_index = 0
@@ -249,6 +252,7 @@ class StreamSegmenter:
         self.segment_chunks = len(self.pre_roll)
         self.silent_blocks = 0
         self.semantic_check_queued_this_pause = False
+        self.fallback_check_queued_this_pause = False
         self.speech_detector.mark_speech()
 
     def finish_active_segment(self) -> None:
@@ -262,6 +266,7 @@ class StreamSegmenter:
         self.recording_started = False
         self.silent_blocks = 0
         self.semantic_check_queued_this_pause = False
+        self.fallback_check_queued_this_pause = False
         self.pre_roll.clear()
         self.speech_detector.reset()
         logger.info("Waiting for audio input...")
@@ -310,6 +315,7 @@ class StreamSegmenter:
                 self.semantic_pause_index += 1
             self.silent_blocks = 0
             self.semantic_check_queued_this_pause = False
+            self.fallback_check_queued_this_pause = False
         else:
             self.silent_blocks += 1
 
@@ -321,17 +327,35 @@ class StreamSegmenter:
         )
 
     def handle_hard_silence_fallback(self) -> None:
-        """Finish the segment unless endpoint ASR finds meaningful new words."""
+        """Queue a fallback guard check without blocking microphone capture."""
         silence_seconds = self.current_silence_seconds()
         segment_seconds = self.current_segment_seconds()
+
+        if self.fallback_check_queued_this_pause:
+            logger.debug("Audio segment fallback check already queued for this pause.")
+            return
+
+        if not self.queue_fallback_endpoint_check():
+            logger.info(
+                "Audio segment fallback accepted: no endpoint guard available after "
+                "{:.1f}s silence.",
+                silence_seconds,
+            )
+            self.pending_completion_reason = f"{silence_seconds:.1f}s silence fallback"
+            self.finish_segment_and_reset()
+            return
+
+        self.fallback_check_queued_this_pause = True
         logger.info(
-            "Audio segment fallback trigger: {:.1f}s silence since last "
+            "Audio segment fallback check queued after {:.1f}s silence since last "
             "speech chunk; segment duration {:.1f}s.",
             silence_seconds,
             segment_seconds,
         )
 
-        new_words = self.fallback_new_words()
+    def handle_fallback_endpoint_result(self, result: SemanticEndpointResult) -> bool:
+        """Apply a non-blocking hard-fallback guard result."""
+        new_words = self.fallback_result_new_words(result)
         if len(new_words) >= self.fallback_new_word_threshold:
             logger.info(
                 "Audio segment fallback delayed: endpoint transcript gained {} new words.",
@@ -341,33 +365,21 @@ class StreamSegmenter:
             self.semantic_pause_index += 1
             self.silent_blocks = 0
             self.semantic_check_queued_this_pause = False
+            self.fallback_check_queued_this_pause = False
             self.speech_detector.mark_speech()
-            return
+            return False
 
+        silence_seconds = self.current_silence_seconds()
         logger.info(
             "Audio segment fallback accepted: no meaningful new words after {:.1f}s silence.",
             silence_seconds,
         )
         self.pending_completion_reason = f"{silence_seconds:.1f}s silence fallback"
         self.finish_segment_and_reset()
+        return True
 
-    def fallback_new_words(self) -> list[str]:
-        """Return meaningful ASR tokens added since the latest semantic check."""
-        if self.semantic_endpoint_detector is None or not self.recorded_chunks:
-            return []
-
-        draft_path = self.output_dir / (
-            f"stream-segment-{self.segment_index:04d}-fallback-check.wav"
-        )
-        try:
-            write_wav_file(draft_path, self.recorded_chunks)
-            result = self.semantic_endpoint_detector(draft_path)
-        except Exception as error:
-            logger.warning("Fallback endpoint transcript check failed: {}", error)
-            return []
-        finally:
-            draft_path.unlink(missing_ok=True)
-
+    def fallback_result_new_words(self, result: SemanticEndpointResult) -> list[str]:
+        """Return meaningful ASR tokens added in a fallback guard result."""
         if result.is_rejected:
             logger.debug(
                 "Fallback endpoint transcript ignored as rejected: {}",
@@ -407,12 +419,32 @@ class StreamSegmenter:
                 segment_index=self.segment_index,
                 pause_index=self.semantic_pause_index,
                 chunks=list(self.recorded_chunks),
+                purpose="semantic",
             )
         )
         logger.info(
             "Semantic endpoint check queued after {:g}s pause.",
             self.semantic_silence_seconds,
         )
+
+    def queue_fallback_endpoint_check(self) -> bool:
+        """Queue a hard-fallback guard job for the current segment snapshot."""
+        if (
+            self.semantic_job_queue is None
+            or self.segment_path is None
+            or not self.recorded_chunks
+        ):
+            return False
+
+        self.semantic_job_queue.put(
+            SemanticEndpointJob(
+                segment_index=self.segment_index,
+                pause_index=self.semantic_pause_index,
+                chunks=list(self.recorded_chunks),
+                purpose="fallback",
+            )
+        )
+        return True
 
     def handle_semantic_endpoint_results(self) -> bool:
         """Apply current semantic endpoint results without blocking capture."""
@@ -433,6 +465,11 @@ class StreamSegmenter:
                     result.segment_index,
                     result.pause_index,
                 )
+                continue
+
+            if result.purpose == "fallback":
+                if self.handle_fallback_endpoint_result(result):
+                    return True
                 continue
 
             if result.is_rejected:
@@ -517,7 +554,7 @@ def run_semantic_endpoint_worker(
 
         draft_path = output_dir / (
             f"stream-segment-{job.segment_index:04d}"
-            f"-semantic-check-{job.pause_index:04d}.wav"
+            f"-{job.purpose}-check-{job.pause_index:04d}.wav"
         )
         try:
             write_wav_file(draft_path, job.chunks)
@@ -528,6 +565,7 @@ def run_semantic_endpoint_worker(
                 is_complete=False,
                 segment_index=job.segment_index,
                 pause_index=job.pause_index,
+                purpose=job.purpose,
             )
         finally:
             draft_path.unlink(missing_ok=True)
@@ -539,6 +577,7 @@ def run_semantic_endpoint_worker(
                 is_rejected=endpoint_result.is_rejected,
                 segment_index=job.segment_index,
                 pause_index=job.pause_index,
+                purpose=job.purpose,
             )
         )
 

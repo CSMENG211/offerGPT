@@ -27,6 +27,35 @@ def constant_chunk(level: int) -> bytes:
     return sample * audio_blocksize()
 
 
+def attach_endpoint_queues(segmenter: StreamSegmenter) -> None:
+    """Attach in-memory endpoint queues without starting a worker thread."""
+    segmenter.semantic_job_queue = queue.Queue()
+    segmenter.semantic_result_queue = queue.Queue()
+
+
+def complete_fallback_check(
+    segmenter: StreamSegmenter,
+    transcript: str,
+    is_rejected: bool = False,
+) -> bool:
+    """Publish one fallback result for the queued fallback job."""
+    assert segmenter.semantic_job_queue is not None
+    assert segmenter.semantic_result_queue is not None
+    job = segmenter.semantic_job_queue.get_nowait()
+    assert job.purpose == "fallback"
+    segmenter.semantic_result_queue.put(
+        SemanticEndpointResult(
+            is_complete=False,
+            transcript=transcript,
+            is_rejected=is_rejected,
+            segment_index=job.segment_index,
+            pause_index=job.pause_index,
+            purpose=job.purpose,
+        )
+    )
+    return segmenter.handle_semantic_endpoint_results()
+
+
 def test_stream_speech_detector_hysteresis_and_hangover() -> None:
     detector = StreamSpeechDetector(
         start_threshold=500,
@@ -119,11 +148,19 @@ def test_fallback_delays_when_endpoint_transcript_gains_words() -> None:
         )
         segmenter.start_segment()
         segmenter.write_segment_chunks([silent_chunk()])
+        attach_endpoint_queues(segmenter)
         segmenter.latest_semantic_transcript = "hello world"
         segmenter.silent_blocks = segmenter.hard_silence_blocks_needed
 
         segmenter.handle_hard_silence_fallback()
 
+        assert segment_queue.empty()
+        assert segmenter.recording_started
+        assert segmenter.fallback_check_queued_this_pause
+
+        completed = complete_fallback_check(segmenter, "hello world from google today")
+
+        assert not completed
         assert segment_queue.empty()
         assert segmenter.recording_started
         assert segmenter.silent_blocks == 0
@@ -149,11 +186,18 @@ def test_fallback_accepts_when_endpoint_transcript_has_no_new_words() -> None:
         )
         segmenter.start_segment()
         segmenter.write_segment_chunks([silent_chunk()])
+        attach_endpoint_queues(segmenter)
         segmenter.latest_semantic_transcript = "hello world"
         segmenter.silent_blocks = segmenter.hard_silence_blocks_needed
 
         segmenter.handle_hard_silence_fallback()
 
+        assert segment_queue.empty()
+        assert segmenter.recording_started
+
+        completed_result = complete_fallback_check(segmenter, "hello world")
+
+        assert completed_result
         completed = segment_queue.get_nowait()
         assert completed.completion_reason == "0.2s silence fallback"
         assert not segmenter.recording_started
@@ -178,11 +222,18 @@ def test_fallback_accepts_one_new_hallucinated_word() -> None:
         )
         segmenter.start_segment()
         segmenter.write_segment_chunks([silent_chunk()])
+        attach_endpoint_queues(segmenter)
         segmenter.latest_semantic_transcript = "hello world"
         segmenter.silent_blocks = segmenter.hard_silence_blocks_needed
 
         segmenter.handle_hard_silence_fallback()
 
+        assert segment_queue.empty()
+        assert segmenter.recording_started
+
+        completed_result = complete_fallback_check(segmenter, "hello world maybe")
+
+        assert completed_result
         completed = segment_queue.get_nowait()
         assert completed.completion_reason == "0.2s silence fallback"
         assert not segmenter.recording_started
@@ -208,11 +259,18 @@ def test_fallback_accepts_repetitive_endpoint_transcript() -> None:
         )
         segmenter.start_segment()
         segmenter.write_segment_chunks([silent_chunk()])
+        attach_endpoint_queues(segmenter)
         segmenter.latest_semantic_transcript = "hello world"
         segmenter.silent_blocks = segmenter.hard_silence_blocks_needed
 
         segmenter.handle_hard_silence_fallback()
 
+        assert segment_queue.empty()
+        assert segmenter.recording_started
+
+        completed_result = complete_fallback_check(segmenter, repeated_transcript)
+
+        assert completed_result
         completed = segment_queue.get_nowait()
         assert completed.completion_reason == "0.2s silence fallback"
         assert not segmenter.recording_started
@@ -239,11 +297,18 @@ def test_fallback_accepts_decayed_endpoint_transcript() -> None:
         )
         segmenter.start_segment()
         segmenter.write_segment_chunks([silent_chunk()])
+        attach_endpoint_queues(segmenter)
         segmenter.latest_semantic_transcript = meaningful_prefix
         segmenter.silent_blocks = segmenter.hard_silence_blocks_needed
 
         segmenter.handle_hard_silence_fallback()
 
+        assert segment_queue.empty()
+        assert segmenter.recording_started
+
+        completed_result = complete_fallback_check(segmenter, decayed_transcript)
+
+        assert completed_result
         completed = segment_queue.get_nowait()
         assert completed.completion_reason == "0.2s silence fallback"
         assert not segmenter.recording_started
@@ -269,11 +334,22 @@ def test_fallback_accepts_rejected_endpoint_transcript() -> None:
         )
         segmenter.start_segment()
         segmenter.write_segment_chunks([silent_chunk()])
+        attach_endpoint_queues(segmenter)
         segmenter.latest_semantic_transcript = "hello world"
         segmenter.silent_blocks = segmenter.hard_silence_blocks_needed
 
         segmenter.handle_hard_silence_fallback()
 
+        assert segment_queue.empty()
+        assert segmenter.recording_started
+
+        completed_result = complete_fallback_check(
+            segmenter,
+            "announce announce announce announce announce",
+            is_rejected=True,
+        )
+
+        assert completed_result
         completed = segment_queue.get_nowait()
         assert completed.completion_reason == "0.2s silence fallback"
         assert not segmenter.recording_started

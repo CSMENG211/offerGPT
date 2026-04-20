@@ -27,7 +27,7 @@ The application is intentionally small and file-oriented. `main.py` handles comm
 Command:
 
 ```sh
-python main.py
+.venv/bin/python main.py
 ```
 
 This is the default path.
@@ -57,7 +57,7 @@ The first successful ChatGPT submission includes the full `gpt.constants.STREAM_
 Command:
 
 ```sh
-python main.py --no-ask
+.venv/bin/python main.py --no-ask
 ```
 
 This follows the same audio capture, transcription, and speaker-hint path as stream mode, but skips `gpt.submit_to_chatgpt()`. It is useful for testing microphone capture, silence thresholds, Whisper transcription, and voice matching without touching ChatGPT.
@@ -67,7 +67,7 @@ This follows the same audio capture, transcription, and speaker-hint path as str
 Command:
 
 ```sh
-python main.py --enroll
+.venv/bin/python main.py --enroll
 ```
 
 This path records an interviewee voice profile.
@@ -86,9 +86,9 @@ Streaming mode can then include a confidence value showing how similar each segm
 The `--photo-mode` flag controls whether the main app captures and uploads photos.
 
 ```sh
-python main.py --photo-mode none
-python main.py --photo-mode test
-python main.py --photo-mode live
+.venv/bin/python main.py --photo-mode none
+.venv/bin/python main.py --photo-mode test
+.venv/bin/python main.py --photo-mode live
 ```
 
 - `none`: disables all photo capture and upload. This is the default and is useful with `--no-ask` for transcription-only testing.
@@ -102,7 +102,7 @@ python main.py --photo-mode live
 Command:
 
 ```sh
-python scripts/test_chatgpt_submit.py
+.venv/bin/python scripts/test_chatgpt_submit.py
 ```
 
 This script opens the automation Chrome profile on macOS only when the CDP endpoint is not already running, builds a stream prompt from a fixed two-sum-style transcript, and submits it to ChatGPT. It bypasses microphone recording, local transcription, and interactive transcript entry, so it is useful for manual browser automation, fixed photo upload, and scroll-behavior checks. It does not assert scroll position automatically, and it does not accept a photo mode; it always attaches `/Users/flora/interview/static.jpg`.
@@ -112,7 +112,7 @@ This script opens the automation Chrome profile on macOS only when the CDP endpo
 Command:
 
 ```sh
-python src/vision/camera.py
+.venv/bin/python src/vision/camera.py
 ```
 
 This captures one image with `imagesnap` from the named macOS camera and writes it to the live photo path. The default camera is `"FaceTime HD Camera"`.
@@ -190,7 +190,7 @@ Audio capture, segmentation, WAV writing, and amplitude helpers. `src/audio/__in
 
 #### `src/audio/segmenter.py`
 
-- `SemanticEndpointJob`: Draft chunk snapshot submitted from the recorder thread to the semantic worker.
+- `SemanticEndpointJob`: Draft chunk snapshot submitted from the recorder thread to the semantic worker for either semantic completion or fallback guarding.
 - `SemanticEndpointResult`: Draft transcript plus completion decision sent from the semantic worker back to the recorder thread.
 - `StreamSpeechDetector`: Stream-only RMS detector with hysteresis: the normal threshold starts recording, a lower continuation threshold keeps active speech alive, and a short hangover protects word/syllable gaps.
 - `StreamSegmenter`: Owns stream-recording mutable state, including open WAV file, segment index, pause index, silence counters, pre-roll, semantic queues, and segment finalization.
@@ -420,7 +420,7 @@ The recorder accepts only current results. Each job/result carries `segment_inde
 
 ### 4. Hard Fallback Guard
 
-If no semantic endpoint is accepted, the recorder reaches `STREAM_HARD_SILENCE_SECONDS`, currently 7.5 seconds. Before cutting, it runs one synchronous endpoint transcript check on the current segment snapshot. If the cleaned endpoint transcript gained at least `STREAM_FALLBACK_NEW_WORD_THRESHOLD`, currently 3, normalized words since the latest semantic check, fallback is delayed and listening continues. Otherwise the segment is queued with a silence-fallback completion reason.
+If no semantic endpoint is accepted, the recorder reaches `STREAM_HARD_SILENCE_SECONDS`, currently 7.5 seconds. Before cutting, it queues a fallback-check snapshot to the semantic worker and keeps reading microphone input. When the worker result returns, the recorder compares the cleaned endpoint transcript to the latest semantic transcript. If it gained at least `STREAM_FALLBACK_NEW_WORD_THRESHOLD`, currently 3, normalized words, fallback is delayed and listening continues. Otherwise the segment is queued with a silence-fallback completion reason.
 
 ## Threading Model
 
@@ -464,6 +464,7 @@ Recorder thread
   keeps reading microphone audio
   after a 2.5-second pause, copies the current chunks
   puts SemanticEndpointJob into semantic_job_queue
+  at hard fallback, queues a fallback-check SemanticEndpointJob
         |
         v
 Semantic worker thread
@@ -476,12 +477,12 @@ Semantic worker thread
 Recorder thread
   polls semantic_result_queue without blocking
   cuts the segment only if the current result is COMPLETE
-  checks for new endpoint-transcribed words before hard fallback
+  applies fallback-check results before accepting hard fallback
 ```
 
 This queue pair carries draft work. It exists so Whisper and Ollama latency cannot block `sounddevice.RawInputStream.read()`. Blocking the recorder thread during endpoint detection can let the microphone input buffer overflow, which may drop audio samples.
 
-Each semantic job/result includes a `segment_index` and `pause_index`. The recorder accepts a result only when both IDs still match the current in-progress segment. This prevents stale results from cutting audio after the speaker resumes talking, after a newer pause begins, or after the hard fallback has already ended the segment.
+Each semantic job/result includes a `segment_index`, `pause_index`, and purpose (`semantic` or `fallback`). The recorder accepts a result only when both IDs still match the current in-progress segment. This prevents stale results from cutting audio after the speaker resumes talking, after a newer pause begins, or after the hard fallback has already ended the segment.
 
 This means SecondVoice may sometimes avoid cutting a segment that was complete at an earlier pause. For example, if a semantic job is queued after `"I would sort the array first"` but the speaker resumes with `"then I would use two pointers"` before the worker returns, the old result is ignored even if it says `COMPLETE`. The tradeoff is intentional: a slightly later cut or larger segment is better than letting stale information split resumed speech in the middle of a continuing answer.
 
