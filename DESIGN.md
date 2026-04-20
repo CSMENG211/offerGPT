@@ -38,7 +38,7 @@ This is the default path.
 4. `start_stream_recorder()` starts a background thread running `audio.stream_utterance_segments()`.
 5. If photo capture is enabled, `photo.start_photo_timer()` starts a second background thread running `capture_photos_on_interval()`.
 6. The main thread loads the configured endpoint and final transcribers, `SpeakerIdentifier`, and `PhotoUploadTracker`.
-7. During recording, the audio loop queues a semantic endpoint job after a 2.5-second pause. A semantic worker thread draft-transcribes the snapshot with the fast endpoint Whisper model, sends that transcript to local Ollama `qwen2.5:1.5b`, and returns a result with both the completion decision and draft transcript. The recorder keeps reading microphone input while that happens and cuts the segment early only when the current, non-stale result is `COMPLETE`. When the 7.5-second hard silence fallback would fire, the recorder first runs one synchronous endpoint transcript check; if the transcript gained at least 3 new words since the latest semantic check, fallback is delayed and listening continues.
+7. During recording, `StreamSegmenter` owns segment boundaries. It uses RMS speech activity, asynchronous semantic endpoint checks after 2.5-second pauses, and a guarded 7.5-second hard fallback. Transcript cleanup is deterministic: repeated ASR tails are trimmed before endpointing, fallback comparison, or final submission; fully repetitive transcripts are skipped.
 8. For every queued completed segment, `process_stream_segment()`:
    - Builds a speaker hint from the WAV file.
    - Transcribes the WAV file locally.
@@ -196,6 +196,7 @@ Audio capture, segmentation, WAV writing, and amplitude helpers. `src/audio/__in
 - `StreamSegmenter`: Owns stream-recording mutable state, including open WAV file, segment index, pause index, silence counters, pre-roll, semantic queues, and segment finalization.
 - `new_transcript_words(...)`: Normalizes transcripts and returns tokens added after their longest common prefix, used by the hard-fallback ASR guard.
 - `is_repetitive_transcript(...)`: Detects ASR repetition loops, including meaningful text that decays into a repeated suffix, so they do not delay fallback or get submitted to ChatGPT.
+- `trim_repetitive_transcript_suffix(...)`: Removes only a repeated ASR suffix when a transcript has a useful prefix; returns an empty string for fully repetitive transcripts.
 - Stream logs announce idle/listening transitions: waiting for audio input, audio input detected, and waiting again after a segment is queued.
 - `stream_utterance_segments(...)`: Compatibility wrapper that creates a `StreamSegmenter` and runs it.
 - `run_semantic_endpoint_worker(...)`: Consumes semantic draft jobs, writes temporary draft WAVs, runs the detector, and publishes results without blocking microphone capture.
@@ -231,9 +232,8 @@ Local semantic endpointing through Ollama.
 
 - `OllamaSemanticEndpointDetector`: Holds the configured Ollama model name and the fast endpoint `Transcriber`. Until the transcriber is attached, checks conservatively return incomplete.
 - `OllamaSemanticEndpointDetector.set_transcriber(transcriber)`: Attaches the loaded Whisper transcriber after app startup.
-- `OllamaSemanticEndpointDetector.is_complete(audio_path)`: Transcribes a draft WAV snapshot, runs the local gibberish classifier, classifies meaningful transcripts through Ollama, logs the result, and returns `True` only for `COMPLETE`.
+- `OllamaSemanticEndpointDetector.is_complete(audio_path)`: Transcribes a draft WAV snapshot, trims deterministic repeated ASR tails, classifies the cleaned transcript through Ollama, logs the result, and returns `True` only for `COMPLETE`.
 - `classify_endpoint_transcript(transcript, model, url, timeout_seconds)`: Sends the shared endpoint prompt to the Ollama chat API and returns the normalized label plus latency.
-- `classify_gibberish_transcript(transcript, model, url, timeout_seconds)`: Sends the transcript quality prompt to Ollama and returns `MEANINGFUL`, `GIBBERISH`, or `OTHER`.
 
 #### `src/speech/transcription.py`
 
@@ -394,15 +394,39 @@ Local transcription backend benchmark harness.
 - `main()`: Creates one configured transcriber and runs it against one or more WAV files.
 - `parse_args()`: Accepts audio paths plus optional backend/model overrides so `faster-whisper` and `mlx-whisper` models can be compared without changing the live app.
 
+## Stream Boundary Pipeline
+
+`StreamSegmenter` is the only owner of active recording state. It decides when a segment starts, when a segment ends, and what completion reason is attached to the queued WAV.
+
+### 1. Speech Activity
+
+Recording starts when RMS audio crosses `DEFAULT_SILENCE_THRESHOLD`. Once a segment is active, `StreamSpeechDetector` uses a lower continuation threshold plus a short hangover so quiet syllables and tiny gaps do not immediately count as silence.
+
+### 2. Transcript Cleanup
+
+Cleanup is deterministic. There is no local LLM gibberish classifier. `trim_repetitive_transcript_suffix(...)` removes only trailing ASR repetition loops while preserving useful prefixes; fully repetitive transcripts become empty and are skipped. The suffix detector uses low vocabulary diversity as the main signal, with repeated bigram and trigram coverage as supporting signals, so variant loops do not have to repeat the exact same three-word phrase.
+
+Cleanup runs in three places:
+
+- semantic endpoint drafts, before the `COMPLETE`/`INCOMPLETE` prompt
+- hard-fallback transcript comparison, before counting new words
+- final completed-segment transcripts, before ChatGPT submission
+
+### 3. Semantic Endpoint Check
+
+After `STREAM_SEMANTIC_SILENCE_SECONDS`, currently 2.5 seconds, the recorder copies the current chunks into a `SemanticEndpointJob` and keeps reading microphone input. A semantic worker thread writes a temporary WAV, runs the fast endpoint transcriber, applies transcript cleanup, and asks Ollama `qwen2.5:1.5b` whether the cleaned transcript is `COMPLETE` or `INCOMPLETE`.
+
+The recorder accepts only current results. Each job/result carries `segment_index` and `pause_index`; if the speaker resumed, a newer pause began, or the segment already ended, the old result is stale and ignored. Anything other than a current `COMPLETE` result keeps recording active.
+
+### 4. Hard Fallback Guard
+
+If no semantic endpoint is accepted, the recorder reaches `STREAM_HARD_SILENCE_SECONDS`, currently 7.5 seconds. Before cutting, it runs one synchronous endpoint transcript check on the current segment snapshot. If the cleaned endpoint transcript gained at least `STREAM_FALLBACK_NEW_WORD_THRESHOLD`, currently 3, normalized words since the latest semantic check, fallback is delayed and listening continues. Otherwise the segment is queued with a silence-fallback completion reason.
+
 ## Threading Model
 
-Stream mode uses the main thread for transcription, voice matching, prompt construction, and browser submission. Audio capture runs in a background thread so recording can continue while segments are processed. Photo capture can run in a second background thread for `test` and `live` modes.
+Stream mode uses the main thread for final transcription, voice matching, prompt construction, and browser submission. Audio capture runs in a background thread so recording can continue while segments are processed. The semantic endpoint worker runs separately so draft Whisper and Ollama latency cannot block microphone reads. Photo capture can run in a second background thread for `test` and `live` modes.
 
 Communication between the recorder and main thread is via `queue.Queue[CompletedStreamSegment | Exception]`. Completed segments carry the WAV path and completion reason. Recorder failures are queued as exceptions and re-raised by `next_stream_segment()`.
-
-Endpointing is hybrid. The recorder queues a semantic endpoint job after `STREAM_SEMANTIC_SILENCE_SECONDS`, currently 2.5 seconds, but it does not run Whisper or Ollama on the recorder thread. The job contains a copy of the current chunk snapshot plus segment and pause IDs. A semantic worker thread writes a draft WAV snapshot, transcribes that draft locally with the fast endpoint transcription backend, and asks Ollama `qwen2.5:1.5b` whether the transcript is `COMPLETE` or `INCOMPLETE` using the same prompt benchmarked by `scripts/test_endpoint_detector.py`.
-
-The recorder polls semantic results without blocking microphone reads. It accepts only results whose segment and pause IDs still match the current in-progress segment, so stale `COMPLETE` results are ignored if the speaker resumed talking or the hard fallback already cut the segment. The detector is intentionally conservative at the integration boundary: if the transcriber is not loaded yet, Ollama is not reachable, the draft transcript is empty, or the model returns anything other than `COMPLETE`, the recorder keeps listening. If no semantic endpoint is accepted, the recorder reaches `STREAM_HARD_SILENCE_SECONDS`, currently 7.5 seconds, and runs the ASR new-word guard before cutting the segment.
 
 Shutdown is coordinated with a shared `threading.Event`. `KeyboardInterrupt` sets the event, joins background threads, and logs completion.
 
@@ -460,8 +484,6 @@ This queue pair carries draft work. It exists so Whisper and Ollama latency cann
 Each semantic job/result includes a `segment_index` and `pause_index`. The recorder accepts a result only when both IDs still match the current in-progress segment. This prevents stale results from cutting audio after the speaker resumes talking, after a newer pause begins, or after the hard fallback has already ended the segment.
 
 This means SecondVoice may sometimes avoid cutting a segment that was complete at an earlier pause. For example, if a semantic job is queued after `"I would sort the array first"` but the speaker resumes with `"then I would use two pointers"` before the worker returns, the old result is ignored even if it says `COMPLETE`. The tradeoff is intentional: a slightly later cut or larger segment is better than letting stale information split resumed speech in the middle of a continuing answer.
-
-The hard fallback is also guarded by endpoint ASR. When RMS silence reaches the fallback threshold, the recorder transcribes the current segment snapshot with the endpoint detector path and compares it to the latest non-stale semantic transcript. If at least 3 normalized new words were added, the recorder treats the RMS silence as untrustworthy, resets the silence counter, and keeps listening. If no meaningful new words were added, fallback proceeds. Repetitive endpoint transcripts and transcripts classified as gibberish by the local model are ignored as likely ASR hallucinations. This lets quiet transcribable speech delay fallback while keyboard noise, repeated junk text, or other non-transcribed sound still counts as silence.
 
 ### Semantic Timeline Examples
 

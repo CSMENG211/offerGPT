@@ -15,6 +15,7 @@ from audio.segmenter import (
     is_repetitive_transcript,
     run_semantic_endpoint_worker,
     stream_utterance_segments,
+    trim_repetitive_transcript_suffix,
 )
 from audio.wav import open_wav_writer, write_chunks, write_wav_file
 
@@ -34,6 +35,7 @@ __all__ = [
     "is_repetitive_transcript",
     "run_semantic_endpoint_worker",
     "stream_utterance_segments",
+    "trim_repetitive_transcript_suffix",
     "write_chunks",
     "write_wav_file",
 ]

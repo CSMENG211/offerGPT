@@ -30,6 +30,7 @@ from audio.constants import (
 )
 
 SemanticEndpointDetector = Callable[[Path], "SemanticEndpointResult"]
+TRANSCRIPT_WORD_PATTERN = re.compile(r"[a-z0-9]+(?:'[a-z0-9]+)?")
 
 
 @dataclass(frozen=True)
@@ -55,9 +56,18 @@ class SemanticEndpointResult:
 
     is_complete: bool
     transcript: str = ""
-    is_gibberish: bool = False
+    is_rejected: bool = False
     segment_index: int = -1
     pause_index: int = -1
+
+
+@dataclass(frozen=True)
+class TranscriptWord:
+    """Normalized transcript token plus its source span."""
+
+    text: str
+    start: int
+    end: int
 
 
 class StreamSpeechDetector:
@@ -358,23 +368,30 @@ class StreamSegmenter:
         finally:
             draft_path.unlink(missing_ok=True)
 
-        if result.is_gibberish:
+        if result.is_rejected:
             logger.debug(
-                "Fallback endpoint transcript ignored as gibberish: {}",
+                "Fallback endpoint transcript ignored as rejected: {}",
                 result.transcript,
             )
             return []
 
-        if is_repetitive_transcript(result.transcript):
+        transcript = trim_repetitive_transcript_suffix(result.transcript)
+        if not transcript:
             logger.debug(
                 "Fallback endpoint transcript ignored as repetitive: {}",
                 result.transcript,
             )
             return []
+        if transcript != result.transcript:
+            logger.debug(
+                "Fallback endpoint transcript trimmed from {!r} to {!r}.",
+                result.transcript,
+                transcript,
+            )
 
         previous_transcript = self.latest_semantic_transcript
-        self.latest_semantic_transcript = result.transcript
-        return new_transcript_words(previous_transcript, result.transcript)
+        self.latest_semantic_transcript = transcript
+        return new_transcript_words(previous_transcript, transcript)
 
     def queue_semantic_endpoint_check(self) -> None:
         """Queue one semantic endpoint job for the current segment snapshot."""
@@ -418,21 +435,28 @@ class StreamSegmenter:
                 )
                 continue
 
-            if result.is_gibberish:
+            if result.is_rejected:
                 logger.debug(
-                    "Semantic endpoint transcript ignored as gibberish: {}",
+                    "Semantic endpoint transcript ignored as rejected: {}",
                     result.transcript,
                 )
                 continue
 
-            if is_repetitive_transcript(result.transcript):
+            transcript = trim_repetitive_transcript_suffix(result.transcript)
+            if not transcript:
                 logger.debug(
                     "Semantic endpoint transcript ignored as repetitive: {}",
                     result.transcript,
                 )
                 continue
+            if transcript != result.transcript:
+                logger.debug(
+                    "Semantic endpoint transcript trimmed from {!r} to {!r}.",
+                    result.transcript,
+                    transcript,
+                )
 
-            self.latest_semantic_transcript = result.transcript
+            self.latest_semantic_transcript = transcript
 
             if not result.is_complete:
                 logger.debug("Semantic endpoint check: incomplete; waiting for more speech.")
@@ -512,7 +536,7 @@ def run_semantic_endpoint_worker(
             SemanticEndpointResult(
                 is_complete=endpoint_result.is_complete,
                 transcript=endpoint_result.transcript,
-                is_gibberish=endpoint_result.is_gibberish,
+                is_rejected=endpoint_result.is_rejected,
                 segment_index=job.segment_index,
                 pause_index=job.pause_index,
             )
@@ -521,32 +545,105 @@ def run_semantic_endpoint_worker(
 
 def normalize_transcript_words(transcript: str) -> list[str]:
     """Return lowercase word tokens for transcript comparison."""
-    return re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)?", transcript.lower())
+    return [word.text for word in normalized_transcript_tokens(transcript)]
+
+
+def normalized_transcript_tokens(transcript: str) -> list[TranscriptWord]:
+    """Return lowercase word tokens with source spans."""
+    return [
+        TranscriptWord(match.group(0).lower(), match.start(), match.end())
+        for match in TRANSCRIPT_WORD_PATTERN.finditer(transcript.lower())
+    ]
 
 
 def is_repetitive_transcript(transcript: str) -> bool:
     """Return whether a transcript looks like an ASR repetition loop."""
     words = normalize_transcript_words(transcript)
-    return words_are_repetitive(words) or has_repetitive_suffix(words)
+    return words_are_repetitive(words) or repetitive_suffix_start(words) is not None
 
 
 def words_are_repetitive(words: list[str], min_tokens: int = 20) -> bool:
     """Return whether the full token sequence looks repetitive."""
+    return repetitive_window_start_offset(words, min_tokens=min_tokens) is not None
+
+
+def repetitive_window_start_offset(words: list[str], min_tokens: int = 20) -> int | None:
+    """Return the start of the repeated pattern inside a repetitive window."""
     if len(words) < min_tokens:
-        return False
+        return None
 
     unique_ratio = len(set(words)) / len(words)
-    return unique_ratio <= 0.25 and max_ngram_coverage(words) >= 0.5
+    if unique_ratio <= 0.25:
+        return 0
+
+    if len(words) >= 20 and unique_ratio <= 0.35:
+        return 0
+
+    if unique_ratio <= 0.35:
+        return dominant_ngram_start(words, ngram_size=2, min_coverage=0.5)
+
+    if unique_ratio <= 0.45:
+        return dominant_ngram_start(words, ngram_size=3, min_coverage=0.5)
+
+    return None
 
 
-def has_repetitive_suffix(words: list[str], min_suffix_tokens: int = 12) -> bool:
-    """Return whether a meaningful-looking transcript decays into a repeated suffix."""
-    for suffix_length in range(min_suffix_tokens, len(words) + 1):
-        suffix = words[-suffix_length:]
-        unique_ratio = len(set(suffix)) / len(suffix)
-        if unique_ratio <= 0.3 and max_ngram_coverage(suffix) >= 0.5:
-            return True
-    return False
+def trim_repetitive_transcript_suffix(transcript: str) -> str:
+    """Remove a trailing ASR repetition loop while preserving the meaningful prefix."""
+    tokens = normalized_transcript_tokens(transcript)
+    suffix_start = repetitive_suffix_start([token.text for token in tokens])
+    if suffix_start is None:
+        return transcript
+    if suffix_start == 0:
+        return ""
+    return transcript[: tokens[suffix_start].start].rstrip(" ,.;:-")
+
+
+def repetitive_suffix_start(
+    words: list[str],
+    min_window_tokens: int = 12,
+    min_prefix_tokens: int = 3,
+) -> int | None:
+    """Return the token index where a trailing repetition loop begins, if any."""
+    if len(words) < min_window_tokens:
+        return None
+
+    for start in range(0, len(words) - min_window_tokens + 1):
+        window = words[start : start + min_window_tokens]
+        window_offset = repetitive_window_start_offset(
+            window,
+            min_tokens=min_window_tokens,
+        )
+        if window_offset is None:
+            continue
+        suffix_start = start + window_offset
+        if suffix_start < min_prefix_tokens:
+            return 0
+        return suffix_start
+
+    return None
+
+
+def dominant_ngram_start(
+    words: list[str],
+    ngram_size: int,
+    min_coverage: float,
+) -> int | None:
+    """Return the first index of the most repeated n-gram when coverage is high."""
+    if len(words) < ngram_size:
+        return None
+
+    counts: dict[tuple[str, ...], int] = {}
+    first_indexes: dict[tuple[str, ...], int] = {}
+    for index in range(len(words) - ngram_size + 1):
+        ngram = tuple(words[index : index + ngram_size])
+        counts[ngram] = counts.get(ngram, 0) + 1
+        first_indexes.setdefault(ngram, index)
+
+    dominant_ngram, dominant_count = max(counts.items(), key=lambda item: item[1])
+    if dominant_count * ngram_size / len(words) < min_coverage:
+        return None
+    return first_indexes[dominant_ngram]
 
 
 def max_ngram_coverage(words: list[str], ngram_size: int = 3) -> float:

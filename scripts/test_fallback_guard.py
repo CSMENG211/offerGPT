@@ -12,8 +12,8 @@ from audio.segmenter import (
     StreamSpeechDetector,
     is_repetitive_transcript,
     new_transcript_words,
+    trim_repetitive_transcript_suffix,
 )
-from speech.endpoint_detector import parse_gibberish_label
 
 
 def silent_chunk() -> bytes:
@@ -63,6 +63,14 @@ def test_repetitive_transcript_detection() -> None:
         "Given an array of integers, I would use a hash map. "
         + "maybe new ones, " * 8
     )
+    variant_decayed_transcript = (
+        "Given an array of integers, I would use a hash map. "
+        "maybe new ones maybe new one maybe new ones maybe the new ones"
+    )
+    bigram_decayed_transcript = (
+        "Given an array of integers, I would use a hash map. "
+        + "left pointer " * 8
+    )
     normal_transcript = (
         "Given an array of integers and a target, return indices of two "
         "numbers that add up to the target."
@@ -70,17 +78,26 @@ def test_repetitive_transcript_detection() -> None:
 
     assert is_repetitive_transcript(repeated_transcript)
     assert is_repetitive_transcript(decayed_transcript)
+    assert is_repetitive_transcript(variant_decayed_transcript)
+    assert is_repetitive_transcript(bigram_decayed_transcript)
     assert not is_repetitive_transcript(normal_transcript)
     assert not is_repetitive_transcript("yes yes yes")
     assert new_transcript_words("hello world", repeated_transcript) == []
     assert new_transcript_words("hello world", decayed_transcript) == []
-
-
-def test_gibberish_label_parsing() -> None:
-    assert parse_gibberish_label("GIBBERISH") == "GIBBERISH"
-    assert parse_gibberish_label("meaningful") == "MEANINGFUL"
-    assert parse_gibberish_label("This is GIBBERISH.") == "OTHER:THIS IS GIBBERISH."
-    assert parse_gibberish_label("unclear") == "OTHER:UNCLEAR"
+    assert (
+        trim_repetitive_transcript_suffix(decayed_transcript)
+        == "Given an array of integers, I would use a hash map"
+    )
+    assert (
+        trim_repetitive_transcript_suffix(variant_decayed_transcript)
+        == "Given an array of integers, I would use a hash map"
+    )
+    assert (
+        trim_repetitive_transcript_suffix(bigram_decayed_transcript)
+        == "Given an array of integers, I would use a hash map"
+    )
+    assert trim_repetitive_transcript_suffix(normal_transcript) == normal_transcript
+    assert trim_repetitive_transcript_suffix(repeated_transcript) == ""
 
 
 def test_fallback_delays_when_endpoint_transcript_gains_words() -> None:
@@ -201,14 +218,45 @@ def test_fallback_accepts_repetitive_endpoint_transcript() -> None:
         assert not segmenter.recording_started
 
 
-def test_fallback_accepts_model_gibberish_endpoint_transcript() -> None:
+def test_fallback_accepts_decayed_endpoint_transcript() -> None:
+    segment_queue: queue.Queue[object] = queue.Queue()
+    meaningful_prefix = "Given an array of integers I would use a hash map"
+    decayed_transcript = meaningful_prefix + " " + "maybe new ones " * 8
+
+    def detector(_audio_path: Path) -> SemanticEndpointResult:
+        return SemanticEndpointResult(
+            is_complete=False,
+            transcript=decayed_transcript,
+        )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        segmenter = StreamSegmenter(
+            output_dir=Path(temp_dir),
+            segment_queue=segment_queue,
+            stop_event=threading.Event(),
+            hard_silence_seconds=0.2,
+            semantic_endpoint_detector=detector,
+        )
+        segmenter.start_segment()
+        segmenter.write_segment_chunks([silent_chunk()])
+        segmenter.latest_semantic_transcript = meaningful_prefix
+        segmenter.silent_blocks = segmenter.hard_silence_blocks_needed
+
+        segmenter.handle_hard_silence_fallback()
+
+        completed = segment_queue.get_nowait()
+        assert completed.completion_reason == "0.2s silence fallback"
+        assert not segmenter.recording_started
+
+
+def test_fallback_accepts_rejected_endpoint_transcript() -> None:
     segment_queue: queue.Queue[object] = queue.Queue()
 
     def detector(_audio_path: Path) -> SemanticEndpointResult:
         return SemanticEndpointResult(
             is_complete=False,
             transcript="announce announce announce announce announce",
-            is_gibberish=True,
+            is_rejected=True,
         )
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -235,12 +283,12 @@ def main() -> None:
     test_stream_speech_detector_hysteresis_and_hangover()
     test_new_transcript_words()
     test_repetitive_transcript_detection()
-    test_gibberish_label_parsing()
     test_fallback_delays_when_endpoint_transcript_gains_words()
     test_fallback_accepts_when_endpoint_transcript_has_no_new_words()
     test_fallback_accepts_one_new_hallucinated_word()
     test_fallback_accepts_repetitive_endpoint_transcript()
-    test_fallback_accepts_model_gibberish_endpoint_transcript()
+    test_fallback_accepts_decayed_endpoint_transcript()
+    test_fallback_accepts_rejected_endpoint_transcript()
     print("fallback guard tests passed")
 
 
