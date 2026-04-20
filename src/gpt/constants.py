@@ -1,7 +1,9 @@
 CHATGPT_URL = "https://chatgpt.com/"
 CHATGPT_COLOR_SCHEME = "dark"
-CHATGPT_AUTO_SCROLL_INTERVAL_MS = 500
-CHATGPT_AUTO_SCROLL_LIFETIME_MS = 10_000
+CHATGPT_RESPONSE_WAIT_TIMEOUT_MS = 90_000
+CHATGPT_SHORT_SCROLL_COUNT = 3
+CHATGPT_SHORT_SCROLL_DELTA_Y = 350
+CHATGPT_SHORT_SCROLL_PAUSE_SECONDS = 0.2
 
 SECONDVOICE_CHATGPT_TAB_NAME = "secondvoice-chatgpt"
 SECONDVOICE_BADGE_ID = "secondvoice-tab-badge"
@@ -33,7 +35,7 @@ STREAM_PROMPT = (
     "take\n"
     "- Prefer ranked bullets ordered by importance\n"
     "- Bold only the single most important point when helpful\n"
-    "- Use at most 5 bullets and 600 characters total\n"
+    "- Use at most 3 bullets and 300 characters total\n"
     "- Avoid filler, repetition, and generic praise\n\n"
     "If the segment is from the interviewer:\n"
     "- Treat it as new or clarified problem context\n"

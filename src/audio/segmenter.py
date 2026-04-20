@@ -18,6 +18,7 @@ from audio.levels import (
 from audio.wav import open_wav_writer, write_wav_file
 from audio.constants import (
     AUDIO_CHANNELS,
+    AUDIO_CHUNK_SECONDS,
     AUDIO_SAMPLE_RATE,
     DEFAULT_SILENCE_THRESHOLD,
     STREAM_HARD_SILENCE_SECONDS,
@@ -25,6 +26,14 @@ from audio.constants import (
 )
 
 SemanticEndpointDetector = Callable[[Path], bool]
+
+
+@dataclass(frozen=True)
+class CompletedStreamSegment:
+    """Recorded stream segment plus the trigger that ended it."""
+
+    path: Path
+    completion_reason: str
 
 
 @dataclass(frozen=True)
@@ -51,7 +60,7 @@ class StreamSegmenter:
     def __init__(
         self,
         output_dir: Path,
-        segment_queue: queue.Queue[Path | Exception],
+        segment_queue: queue.Queue[CompletedStreamSegment | Exception],
         stop_event: threading.Event,
         hard_silence_seconds: float = STREAM_HARD_SILENCE_SECONDS,
         silence_threshold: int = DEFAULT_SILENCE_THRESHOLD,
@@ -73,6 +82,7 @@ class StreamSegmenter:
         )
         self.pre_roll = create_pre_roll_buffer()
         self.recorded_chunks: list[bytes] = []
+        self.segment_chunks = 0
         self.silent_blocks = 0
         self.semantic_check_queued_this_pause = False
         self.semantic_pause_index = 0
@@ -80,6 +90,7 @@ class StreamSegmenter:
         self.segment_index = 0
         self.wav_file: wave.Wave_write | None = None
         self.segment_path: Path | None = None
+        self.pending_completion_reason = "shutdown"
 
         self.semantic_job_queue: queue.Queue[SemanticEndpointJob | None] | None = None
         self.semantic_result_queue: queue.Queue[SemanticEndpointResult] | None = None
@@ -160,9 +171,16 @@ class StreamSegmenter:
             self.queue_semantic_endpoint_check()
 
         if self.silent_blocks >= self.hard_silence_blocks_needed:
+            silence_seconds = self.current_silence_seconds()
+            segment_seconds = self.current_segment_seconds()
             logger.info(
-                "Audio segment fallback trigger: {:g}s of silence.",
-                self.hard_silence_seconds,
+                "Audio segment fallback trigger: {:.1f}s silence since last "
+                "speech chunk; segment duration {:.1f}s.",
+                silence_seconds,
+                segment_seconds,
+            )
+            self.pending_completion_reason = (
+                f"{silence_seconds:.1f}s silence fallback"
             )
             self.finish_segment_and_reset()
 
@@ -174,6 +192,7 @@ class StreamSegmenter:
         self.wav_file = open_wav_writer(self.segment_path)
         self.recording_started = True
         self.write_segment_chunks(self.pre_roll)
+        self.segment_chunks = len(self.pre_roll)
         self.silent_blocks = 0
         self.semantic_check_queued_this_pause = False
 
@@ -197,10 +216,17 @@ class StreamSegmenter:
             return
 
         self.wav_file.close()
-        self.segment_queue.put(self.segment_path)
+        self.segment_queue.put(
+            CompletedStreamSegment(
+                path=self.segment_path,
+                completion_reason=self.pending_completion_reason,
+            )
+        )
         self.wav_file = None
         self.segment_path = None
         self.recorded_chunks = []
+        self.segment_chunks = 0
+        self.pending_completion_reason = "shutdown"
 
     def write_segment_chunks(self, chunks: Iterable[bytes]) -> None:
         """Write raw chunks into the current segment and snapshot buffer."""
@@ -210,6 +236,15 @@ class StreamSegmenter:
         for item in chunks:
             self.wav_file.writeframes(item)
             self.recorded_chunks.append(item)
+            self.segment_chunks += 1
+
+    def current_silence_seconds(self) -> float:
+        """Return the current consecutive silence duration."""
+        return self.silent_blocks * AUDIO_CHUNK_SECONDS
+
+    def current_segment_seconds(self) -> float:
+        """Return the current segment duration, including pre-roll."""
+        return self.segment_chunks * AUDIO_CHUNK_SECONDS
 
     def update_silence_state(self, is_speech: bool) -> None:
         """Update silence counters and pause identity."""
@@ -244,7 +279,7 @@ class StreamSegmenter:
                 chunks=list(self.recorded_chunks),
             )
         )
-        logger.debug(
+        logger.info(
             "Semantic endpoint check queued after {:g}s pause.",
             self.semantic_silence_seconds,
         )
@@ -278,6 +313,9 @@ class StreamSegmenter:
                 "Audio segment trigger: semantic completion after {:g}s pause.",
                 self.semantic_silence_seconds,
             )
+            self.pending_completion_reason = (
+                f"semantic completion after {self.semantic_silence_seconds:g}s pause"
+            )
             self.finish_segment_and_reset()
             return True
 
@@ -291,7 +329,7 @@ class StreamSegmenter:
 
 def stream_utterance_segments(
     output_dir: Path,
-    segment_queue: queue.Queue[Path | Exception],
+    segment_queue: queue.Queue[CompletedStreamSegment | Exception],
     stop_event: threading.Event,
     hard_silence_seconds: float = STREAM_HARD_SILENCE_SECONDS,
     silence_threshold: int = DEFAULT_SILENCE_THRESHOLD,

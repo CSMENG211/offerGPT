@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from time import sleep
 
@@ -6,9 +7,11 @@ from loguru import logger
 from automation import activate_chrome, connect_to_cdp_browser
 from automation.constants import DEFAULT_CDP_URL
 from gpt.constants import (
-    CHATGPT_AUTO_SCROLL_INTERVAL_MS,
-    CHATGPT_AUTO_SCROLL_LIFETIME_MS,
     CHATGPT_COLOR_SCHEME,
+    CHATGPT_RESPONSE_WAIT_TIMEOUT_MS,
+    CHATGPT_SHORT_SCROLL_COUNT,
+    CHATGPT_SHORT_SCROLL_DELTA_Y,
+    CHATGPT_SHORT_SCROLL_PAUSE_SECONDS,
     CHATGPT_URL,
     SECONDVOICE_BADGE_ID,
     SECONDVOICE_CHATGPT_TAB_NAME,
@@ -25,6 +28,8 @@ def submit_to_chatgpt(
     if not prompt.strip():
         logger.info("Skipping ChatGPT submission because the transcript is empty.")
         return False
+
+    suppress_node_deprecation_warnings()
 
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright
@@ -52,11 +57,12 @@ def submit_to_chatgpt(
                     return False
 
             fill_prompt(prompt_box, prompt)
-            scroll_to_bottom(page)
             submit_prompt(page, prompt_box, wait_for_upload=has_photo)
-            enable_auto_scroll_to_bottom(page)
-            scroll_to_bottom(page)
             logger.info("Submitted transcript to ChatGPT.")
+            stop_auto_scroll_to_bottom(page)
+            force_scroll_to_bottom(page)
+            wait_for_chatgpt_response(page)
+            scroll_down_short_times(page)
             activate_chrome()
             return True
         except PlaywrightTimeoutError as exc:
@@ -65,6 +71,20 @@ def submit_to_chatgpt(
             raise SystemExit(1) from exc
         finally:
             session.close()
+
+
+def suppress_node_deprecation_warnings() -> None:
+    """Suppress noisy Node deprecation warnings emitted by Playwright's driver."""
+    node_options = os.environ.get("NODE_OPTIONS", "")
+    no_deprecation_flag = "--no-deprecation"
+    if no_deprecation_flag in node_options.split():
+        return
+
+    os.environ["NODE_OPTIONS"] = (
+        f"{node_options} {no_deprecation_flag}".strip()
+        if node_options
+        else no_deprecation_flag
+    )
 
 
 def open_chatgpt_page(context):
@@ -169,12 +189,12 @@ def stabilize_chatgpt_theme(page) -> None:
         logger.debug("Could not stabilize ChatGPT theme: {}", exc)
 
 
-def enable_auto_scroll_to_bottom(page) -> None:
-    """Keep the ChatGPT conversation pinned to the newest content."""
+def stop_auto_scroll_to_bottom(page) -> None:
+    """Stop any old SecondVoice auto-scroll loop left on the ChatGPT page."""
     try:
         page.evaluate(
             """
-            ({ intervalMs, lifetimeMs }) => {
+            () => {
               const state = window.__secondvoiceAutoScroll;
               if (state?.timer) {
                 window.clearInterval(state.timer);
@@ -185,86 +205,123 @@ def enable_auto_scroll_to_bottom(page) -> None:
               if (state?.observer) {
                 state.observer.disconnect();
               }
-
-              const scrollToBottom = () => {
-                const containers = [
-                  document.scrollingElement,
-                  document.documentElement,
-                  document.body,
-                  document.querySelector("main"),
-                  document.querySelector("[role='main']"),
-                  ...document.querySelectorAll("div"),
-                ].filter((element) => {
-                  if (!element) {
-                    return false;
-                  }
-                  const style = window.getComputedStyle(element);
-                  const canScroll = /(auto|scroll)/.test(style.overflowY);
-                  return canScroll && element.scrollHeight > element.clientHeight + 8;
-                });
-
-                for (const element of containers) {
-                  element.scrollTop = element.scrollHeight;
-                }
-                window.scrollTo(0, document.body.scrollHeight);
-              };
-
-              const observer = new MutationObserver(scrollToBottom);
-              observer.observe(document.body, {
-                childList: true,
-                subtree: true,
-                characterData: true,
-              });
-
-              const stop = () => {
-                const current = window.__secondvoiceAutoScroll;
-                if (current?.observer) {
-                  current.observer.disconnect();
-                }
-                if (current?.timer) {
-                  window.clearInterval(current.timer);
-                }
-                if (current?.timeout) {
-                  window.clearTimeout(current.timeout);
-                }
-                delete window.__secondvoiceAutoScroll;
-              };
-
-              window.__secondvoiceAutoScroll = {
-                observer,
-                timer: window.setInterval(scrollToBottom, intervalMs),
-                timeout: window.setTimeout(stop, lifetimeMs),
-                scrollToBottom,
-                stop,
-              };
-              scrollToBottom();
+              delete window.__secondvoiceAutoScroll;
             }
-            """,
-            {
-                "intervalMs": CHATGPT_AUTO_SCROLL_INTERVAL_MS,
-                "lifetimeMs": CHATGPT_AUTO_SCROLL_LIFETIME_MS,
-            },
+            """
         )
     except Exception as exc:
-        logger.debug("Could not enable ChatGPT auto-scroll: {}", exc)
+        logger.debug("Could not stop ChatGPT auto-scroll: {}", exc)
 
 
-def scroll_to_bottom(page) -> None:
-    """Nudge the ChatGPT page to the newest message immediately."""
+def force_scroll_to_bottom(page) -> None:
+    """Aggressively move every likely ChatGPT scroll container to the bottom."""
     try:
         page.evaluate(
             """
             () => {
-              if (window.__secondvoiceAutoScroll?.scrollToBottom) {
-                window.__secondvoiceAutoScroll.scrollToBottom();
-                return;
+              const containers = [
+                document.scrollingElement,
+                document.documentElement,
+                document.body,
+                document.querySelector("main"),
+                document.querySelector("[role='main']"),
+                ...document.querySelectorAll("div"),
+              ].filter((element) => {
+                if (!element) {
+                  return false;
+                }
+                return element.scrollHeight > element.clientHeight + 8;
+              });
+
+              for (const element of containers) {
+                element.scrollTop = element.scrollHeight;
               }
               window.scrollTo(0, document.body.scrollHeight);
             }
             """
         )
     except Exception as exc:
-        logger.debug("Could not scroll ChatGPT to the bottom: {}", exc)
+        logger.debug("Could not force-scroll ChatGPT to the bottom: {}", exc)
+
+
+def wait_for_chatgpt_response(page) -> None:
+    """Wait until ChatGPT appears to finish responding, with a timeout fallback."""
+    try:
+        stop_button = find_stop_button(page)
+        if stop_button is not None:
+            stop_button.wait_for(state="hidden", timeout=CHATGPT_RESPONSE_WAIT_TIMEOUT_MS)
+            return
+
+        page.wait_for_function(
+            """
+            () => {
+              const button = document.querySelector(
+                '[data-testid="send-button"], '
+                + 'button[aria-label="Send prompt"], '
+                + 'button[aria-label*="Send"]'
+              );
+              return button && !button.disabled && button.getAttribute("aria-disabled") !== "true";
+            }
+            """,
+            timeout=CHATGPT_RESPONSE_WAIT_TIMEOUT_MS,
+        )
+    except Exception as exc:
+        logger.debug("Timed out or could not detect ChatGPT response completion: {}", exc)
+
+
+def find_stop_button(page):
+    """Return ChatGPT's stop button while a response is streaming, if visible."""
+    selectors = [
+        "[data-testid='stop-button']",
+        "button[aria-label='Stop generating']",
+        "button[aria-label*='Stop']",
+    ]
+
+    for selector in selectors:
+        button = page.locator(selector).first
+        try:
+            button.wait_for(state="visible", timeout=2_000)
+            return button
+        except Exception:
+            continue
+
+    return None
+
+
+def scroll_down_short_times(page) -> None:
+    """Nudge the ChatGPT page downward a few times without pinning it."""
+    try:
+        for _ in range(CHATGPT_SHORT_SCROLL_COUNT):
+            page.evaluate(
+                """
+                (deltaY) => {
+                  const containers = [
+                    document.scrollingElement,
+                    document.documentElement,
+                    document.body,
+                    document.querySelector("main"),
+                    document.querySelector("[role='main']"),
+                    ...document.querySelectorAll("div"),
+                  ].filter((element) => {
+                    if (!element) {
+                      return false;
+                    }
+                    const style = window.getComputedStyle(element);
+                    const canScroll = /(auto|scroll)/.test(style.overflowY);
+                    return canScroll && element.scrollHeight > element.clientHeight + 8;
+                  });
+
+                  for (const element of containers) {
+                    element.scrollBy({ top: deltaY, behavior: "smooth" });
+                  }
+                  window.scrollBy({ top: deltaY, behavior: "smooth" });
+                }
+                """,
+                CHATGPT_SHORT_SCROLL_DELTA_Y,
+            )
+            sleep(CHATGPT_SHORT_SCROLL_PAUSE_SECONDS)
+    except Exception as exc:
+        logger.debug("Could not short-scroll ChatGPT: {}", exc)
 
 
 def fill_prompt(prompt_box, prompt: str) -> None:

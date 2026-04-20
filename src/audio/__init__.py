@@ -7,6 +7,7 @@ from audio.levels import (
     rms_level,
 )
 from audio.segmenter import (
+    CompletedStreamSegment,
     SemanticEndpointDetector,
     SemanticEndpointJob,
     SemanticEndpointResult,
@@ -17,6 +18,7 @@ from audio.segmenter import (
 from audio.wav import open_wav_writer, write_chunks, write_wav_file
 
 __all__ = [
+    "CompletedStreamSegment",
     "SemanticEndpointDetector",
     "SemanticEndpointJob",
     "SemanticEndpointResult",

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from audio import stream_utterance_segments
+from audio import CompletedStreamSegment, stream_utterance_segments
 from audio.constants import (
     DEFAULT_SILENCE_THRESHOLD,
     STREAM_HARD_SILENCE_SECONDS,
@@ -64,7 +64,7 @@ def stream_loop(options: RuntimeOptions) -> None:
     print_stream_mode_banner(options)
 
     with tempfile.TemporaryDirectory(prefix="secondvoice-eval-") as temp_dir:
-        segment_queue: queue.Queue[Path | Exception] = queue.Queue()
+        segment_queue: queue.Queue[CompletedStreamSegment | Exception] = queue.Queue()
         stop_event = threading.Event()
         semantic_endpoint_detector = OllamaSemanticEndpointDetector()
         recorder = start_stream_recorder(
@@ -103,12 +103,12 @@ def stream_loop(options: RuntimeOptions) -> None:
             speaker_identifier = SpeakerIdentifier()
             photo_tracker = PhotoUploadTracker()
             while True:
-                audio_path = next_stream_segment(segment_queue)
-                if audio_path is None:
+                segment = next_stream_segment(segment_queue)
+                if segment is None:
                     continue
 
                 submitted = process_stream_segment(
-                    audio_path,
+                    segment,
                     final_transcriber,
                     speaker_identifier,
                     options,
@@ -129,7 +129,7 @@ def stream_loop(options: RuntimeOptions) -> None:
 
 def start_stream_recorder(
     output_dir: Path,
-    segment_queue: queue.Queue[Path | Exception],
+    segment_queue: queue.Queue[CompletedStreamSegment | Exception],
     stop_event: threading.Event,
     semantic_endpoint_detector: OllamaSemanticEndpointDetector,
 ) -> threading.Thread:
@@ -150,7 +150,9 @@ def start_stream_recorder(
     return recorder
 
 
-def next_stream_segment(segment_queue: queue.Queue[Path | Exception]) -> Path | None:
+def next_stream_segment(
+    segment_queue: queue.Queue[CompletedStreamSegment | Exception],
+) -> CompletedStreamSegment | None:
     """Return the next completed stream segment, or None while waiting."""
     try:
         item = segment_queue.get(timeout=0.2)
@@ -164,7 +166,7 @@ def next_stream_segment(segment_queue: queue.Queue[Path | Exception]) -> Path | 
 
 
 def process_stream_segment(
-    audio_path: Path,
+    segment: CompletedStreamSegment,
     transcriber: Transcriber,
     speaker_identifier: SpeakerIdentifier,
     options: RuntimeOptions,
@@ -172,6 +174,7 @@ def process_stream_segment(
     photo_tracker: PhotoUploadTracker,
 ) -> bool:
     """Transcribe one stream segment and optionally submit it for feedback."""
+    audio_path = segment.path
     speaker_hint = build_speaker_hint(audio_path, speaker_identifier)
     transcript = transcriber.transcribe(audio_path)
     audio_path.unlink(missing_ok=True)
@@ -183,6 +186,10 @@ def process_stream_segment(
         return False
 
     if options.ask_chatgpt:
+        logger.info(
+            "Submitting to ChatGPT because segment ended by {}.",
+            segment.completion_reason,
+        )
         photo_path, photo_signature = next_photo_upload(options.photo_mode, photo_tracker)
         submitted_to_chatgpt = submit_to_chatgpt(
             build_stream_prompt(
