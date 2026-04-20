@@ -38,12 +38,13 @@ This is the default path.
 4. `start_stream_recorder()` starts a background thread running `audio.stream_utterance_segments()`.
 5. If photo capture is enabled, `photo.start_photo_timer()` starts a second background thread running `capture_photos_on_interval()`.
 6. The main thread loads the configured endpoint and final transcribers, `SpeakerIdentifier`, and `PhotoUploadTracker`.
-7. During recording, the audio loop queues a semantic endpoint job after a 3-second pause. A semantic worker thread draft-transcribes the snapshot with the fast endpoint Whisper model, sends that transcript to local Ollama `qwen2.5:1.5b`, and returns a result. The recorder keeps reading microphone input while that happens and cuts the segment early only when the current, non-stale result is `COMPLETE`. If the detector returns incomplete or fails, the hard 10-second silence fallback still cuts the segment.
-8. For every queued WAV segment, `process_stream_segment()`:
+7. During recording, the audio loop queues a semantic endpoint job after a 2.5-second pause. A semantic worker thread draft-transcribes the snapshot with the fast endpoint Whisper model, sends that transcript to local Ollama `qwen2.5:1.5b`, and returns a result. The recorder keeps reading microphone input while that happens and cuts the segment early only when the current, non-stale result is `COMPLETE`. If the detector returns incomplete or fails, the hard 7.5-second silence fallback still cuts the segment.
+8. For every queued completed segment, `process_stream_segment()`:
    - Builds a speaker hint from the WAV file.
    - Transcribes the WAV file locally.
    - Deletes the temporary WAV segment.
    - Prints the transcript and speaker hint.
+   - Logs whether the segment ended by semantic completion, silence fallback, or shutdown.
    - Builds a ChatGPT prompt.
    - Attaches a photo only when the selected photo exists and changed since the last successful upload.
    - Submits the prompt through Playwright browser automation.
@@ -104,7 +105,7 @@ Command:
 python scripts/test_chatgpt_submit.py
 ```
 
-This script opens the automation Chrome profile on macOS only when the CDP endpoint is not already running, builds a stream prompt from a fixed two-sum-style transcript, and submits it to ChatGPT. It bypasses microphone recording, local transcription, and interactive transcript entry, so it is useful for testing browser automation and fixed photo upload behavior. It does not accept a photo mode; it always attaches `/Users/flora/interview/static.jpg`.
+This script opens the automation Chrome profile on macOS only when the CDP endpoint is not already running, builds a stream prompt from a fixed two-sum-style transcript, and submits it to ChatGPT. It bypasses microphone recording, local transcription, and interactive transcript entry, so it is useful for manual browser automation, fixed photo upload, and scroll-behavior checks. It does not assert scroll position automatically, and it does not accept a photo mode; it always attaches `/Users/flora/interview/static.jpg`.
 
 ### 6. Standalone Camera Capture
 
@@ -284,13 +285,16 @@ ChatGPT-specific browser automation and prompt construction. `src/gpt/__init__.p
 
 #### `src/gpt/actions.py`
 
-- `submit_to_chatgpt(prompt, photo_path, cdp_url)`: Opens ChatGPT, attaches an optional photo, fills the prompt, submits it, and brings Chrome forward on macOS.
+- `submit_to_chatgpt(prompt, photo_path, cdp_url)`: Opens ChatGPT, attaches an optional photo, fills the prompt, submits it, scrolls the conversation into view, waits briefly for the response to finish, and brings Chrome forward on macOS.
 - `open_chatgpt_page(context)`: Reuses the dedicated marked SecondVoice ChatGPT tab or opens and marks a new one.
 - `is_secondvoice_chatgpt_page(page)`: Checks whether a ChatGPT tab has the SecondVoice tab marker.
 - `mark_secondvoice_chatgpt_page(page)`: Marks one ChatGPT tab as the dedicated SecondVoice automation tab and adds a visible title prefix plus in-page badge.
 - `stabilize_chatgpt_theme(page)`: Pins the automation page to the dark color scheme before submission.
-- `enable_auto_scroll_to_bottom(page)`: After a new prompt is submitted, installs a short-lived in-page timer and mutation observer that keep the ChatGPT conversation pinned to the newest prompt or response, then self-expire.
-- `scroll_to_bottom(page)`: Immediately nudges the ChatGPT page to the newest visible message.
+- `stop_auto_scroll_to_bottom(page)`: Clears any old SecondVoice auto-scroll timer or observer left in the ChatGPT tab.
+- `force_scroll_to_bottom(page)`: Immediately forces likely ChatGPT scroll containers to the bottom after submitting a prompt.
+- `wait_for_chatgpt_response(page)`: Waits until ChatGPT appears done responding, using the stop button when visible and the enabled send button as a fallback signal.
+- `find_stop_button(page)`: Tries known ChatGPT stop-generating button selectors.
+- `scroll_down_short_times(page)`: Optionally performs a small number of post-response scroll nudges. The count is controlled by `CHATGPT_SHORT_SCROLL_COUNT`; `0` disables these nudges.
 - `fill_prompt(prompt_box, prompt)`: Writes the prompt into the composer.
 - `submit_prompt(page, prompt_box, wait_for_upload)`: Sends the prompt by button click or Enter fallback.
 - `find_send_button(page)`: Tries known ChatGPT send-button selectors.
@@ -309,7 +313,7 @@ ChatGPT-specific browser automation and prompt construction. `src/gpt/__init__.p
 
 - `STREAM_PROMPT`: System-style instruction sent on the first ChatGPT submission.
 - `PHOTO_CONTEXT_PROMPT`: Instruction inserted when a photo is attached.
-- ChatGPT URL, dark theme setting, and dedicated SecondVoice tab marker constants.
+- ChatGPT URL, dark theme setting, response wait timeout, scroll tuning, and dedicated SecondVoice tab marker constants.
 
 ### `src/vision/`
 
@@ -421,7 +425,7 @@ Main app thread
   prints or submits the segment
 ```
 
-This queue carries finished work. Its items are either completed WAV paths or recorder exceptions. The recorder should not do final transcription, speaker matching, prompt construction, or browser automation because those operations are slower than real-time microphone capture.
+This queue carries finished work. Its items are either `CompletedStreamSegment` objects or recorder exceptions. A completed segment includes the WAV path plus the trigger that ended it, such as semantic completion, silence fallback, or shutdown. The recorder should not do final transcription, speaker matching, prompt construction, or browser automation because those operations are slower than real-time microphone capture.
 
 ### Semantic Endpoint Queues
 
@@ -430,7 +434,7 @@ Semantic endpointing uses a second queue pair inside the audio layer.
 ```text
 Recorder thread
   keeps reading microphone audio
-  after a 3-second pause, copies the current chunks
+  after a 2.5-second pause, copies the current chunks
   puts SemanticEndpointJob into semantic_job_queue
         |
         v
@@ -454,21 +458,21 @@ This means SecondVoice may sometimes avoid cutting a segment that was complete a
 
 ### Semantic Timeline Examples
 
-If the speaker stays silent after the first semantic check, an early cut can happen before the 10-second fallback:
+If the speaker stays silent after the first semantic check, an early cut can happen before the 7.5-second fallback:
 
 ```text
 t+0.0  silence starts
-t+3.0  semantic job queued for segment 5, pause 10
-t+3.5  semantic result returns COMPLETE for segment 5, pause 10
-t+3.5  recorder accepts the current result and cuts the segment
+t+2.5  semantic job queued for segment 5, pause 10
+t+3.0  semantic result returns COMPLETE for segment 5, pause 10
+t+3.0  recorder accepts the current result and cuts the segment
 ```
 
 If the speaker resumes before the semantic result returns, the old result is stale and ignored:
 
 ```text
 t+0.0  silence starts
-t+3.0  semantic job queued for segment 5, pause 10
-t+3.1  speaker resumes; recorder increments pause_index to 11
+t+2.5  semantic job queued for segment 5, pause 10
+t+2.6  speaker resumes; recorder increments pause_index to 11
 t+4.0  old semantic result returns COMPLETE for segment 5, pause 10
 t+4.0  recorder ignores the stale result
 ```
@@ -477,14 +481,14 @@ If the speaker pauses again after resuming, the recorder queues a new semantic c
 
 ```text
 t+0.0  first silence starts
-t+3.0  semantic job queued for segment 5, pause 10
-t+3.1  speaker resumes; recorder increments pause_index to 11
+t+2.5  semantic job queued for segment 5, pause 10
+t+2.6  speaker resumes; recorder increments pause_index to 11
 t+4.0  old result for pause 10 is ignored as stale
 t+5.0  second silence starts
-t+8.0  semantic job queued for segment 5, pause 11
+t+7.5  semantic job queued for segment 5, pause 11
 ```
 
-The 10-second hard fallback is also counted from the current continuous silence. In the last example, if no current semantic result is accepted, fallback would happen around `t+15.0`, not `t+10.0`, because speech resumed at `t+3.1`.
+The 7.5-second hard fallback is also counted from the current continuous silence. In the last example, if no current semantic result is accepted, fallback would happen around `t+12.5`, not `t+7.5`, because speech resumed at `t+2.6`.
 
 The semantic worker never mutates recorder-owned state. It does not close segment files, clear buffers, or decide final boundaries directly. The recorder remains the single owner of mutable recording state and the only code path that calls `finish_segment()`.
 
