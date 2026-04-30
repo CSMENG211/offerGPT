@@ -126,11 +126,16 @@ class StreamSegmenter:
         self.segment_chunks = 0
         self.silent_blocks = 0
         self.semantic_check_queued_this_pause = False
+        self.semantic_check_in_flight = False
         self.semantic_pause_index = 0
         self.last_transcription_job_chunks = 0
         self.last_seen_transcript_key = ""
         self.latest_transcript = ""
         self.transcript_agreements = 0
+        self.locked_transcript = ""
+        self.locked_transcript_key = ""
+        self.locked_chunk_index = 0
+        self.last_semantic_transcript_key = ""
         self.recording_started = False
         self.segment_index = 0
         self.wav_file: wave.Wave_write | None = None
@@ -256,10 +261,15 @@ class StreamSegmenter:
         self.segment_chunks = len(self.pre_roll)
         self.silent_blocks = 0
         self.semantic_check_queued_this_pause = False
+        self.semantic_check_in_flight = False
         self.last_transcription_job_chunks = 0
         self.last_seen_transcript_key = ""
         self.latest_transcript = ""
         self.transcript_agreements = 0
+        self.locked_transcript = ""
+        self.locked_transcript_key = ""
+        self.locked_chunk_index = 0
+        self.last_semantic_transcript_key = ""
         self.speech_detector.mark_speech()
 
     def finish_active_segment(self) -> None:
@@ -273,10 +283,15 @@ class StreamSegmenter:
         self.recording_started = False
         self.silent_blocks = 0
         self.semantic_check_queued_this_pause = False
+        self.semantic_check_in_flight = False
         self.last_transcription_job_chunks = 0
         self.last_seen_transcript_key = ""
         self.latest_transcript = ""
         self.transcript_agreements = 0
+        self.locked_transcript = ""
+        self.locked_transcript_key = ""
+        self.locked_chunk_index = 0
+        self.last_semantic_transcript_key = ""
         self.pre_roll.clear()
         self.speech_detector.reset()
         logger.info("Waiting for audio input...")
@@ -300,6 +315,10 @@ class StreamSegmenter:
         self.segment_chunks = 0
         self.pending_completion_reason = "shutdown"
         self.latest_transcript = ""
+        self.locked_transcript = ""
+        self.locked_transcript_key = ""
+        self.locked_chunk_index = 0
+        self.last_semantic_transcript_key = ""
 
     def write_segment_chunks(self, chunks: Iterable[bytes]) -> None:
         """Write raw chunks into the current segment and snapshot buffer."""
@@ -322,6 +341,7 @@ class StreamSegmenter:
                 self.semantic_pause_index += 1
             self.silent_blocks = 0
             self.semantic_check_queued_this_pause = False
+            self.semantic_check_in_flight = False
         else:
             self.silent_blocks += 1
 
@@ -344,7 +364,9 @@ class StreamSegmenter:
             TranscriptionJob(
                 segment_index=self.segment_index,
                 pause_index=self.semantic_pause_index,
-                chunks=list(self.recorded_chunks),
+                start_chunk_index=self.locked_chunk_index,
+                end_chunk_index=self.segment_chunks,
+                chunks=list(self.recorded_chunks[self.locked_chunk_index : self.segment_chunks]),
             )
         )
         self.last_transcription_job_chunks = self.segment_chunks
@@ -387,9 +409,11 @@ class StreamSegmenter:
                 continue
 
             transcript = self.cleaned_transcript(result)
-            if transcript:
-                self.latest_transcript = transcript
-                self.update_transcript_agreement(transcript)
+            if transcript or self.locked_transcript:
+                full_transcript = self.combined_transcript(transcript)
+                self.latest_transcript = full_transcript
+                self.update_transcript_agreement(full_transcript)
+                self.maybe_lock_confirmed_transcript(full_transcript, result.end_chunk_index)
             else:
                 self.update_transcript_agreement("")
 
@@ -424,38 +448,71 @@ class StreamSegmenter:
         else:
             self.transcript_agreements = 0
 
+    def combined_transcript(self, transcript: str) -> str:
+        """Combine locked transcript prefix with freshly transcribed suffix."""
+        if not self.locked_transcript:
+            return transcript
+        if not transcript:
+            return self.locked_transcript
+        return f"{self.locked_transcript} {transcript}"
+
+    def maybe_lock_confirmed_transcript(
+        self,
+        transcript: str,
+        end_chunk_index: int,
+    ) -> None:
+        """Lock transcript once it reaches agreement so it is never re-transcribed."""
+        transcript_key = self.normalized_transcript_key(transcript)
+        if not transcript_key:
+            return
+        if self.transcript_agreements < self.transcript_agreement_count:
+            return
+        if transcript_key == self.locked_transcript_key:
+            return
+        if end_chunk_index <= self.locked_chunk_index:
+            return
+
+        self.locked_transcript = transcript
+        self.locked_transcript_key = transcript_key
+        self.locked_chunk_index = end_chunk_index
+        logger.debug(
+            "Locked transcript through chunk {} after {} agreements.",
+            self.locked_chunk_index,
+            self.transcript_agreements,
+        )
+
     def normalized_transcript_key(self, transcript: str) -> str:
         """Return a normalized transcript key for agreement comparison."""
         words = [match.group(0) for match in TRANSCRIPT_WORD_PATTERN.finditer(transcript.lower())]
         return " ".join(words)
 
     def should_queue_semantic_check(self) -> bool:
-        """Return whether a stabilized transcript is ready for semantic classification."""
+        """Return whether new stabilized transcript text is ready for classification."""
         return (
-            not self.semantic_check_queued_this_pause
-            and self.silent_blocks >= self.semantic_silence_blocks_needed
-            and self.transcript_agreements >= self.transcript_agreement_count
-            and bool(self.latest_transcript)
+            bool(self.locked_transcript_key)
+            and self.locked_transcript_key != self.last_semantic_transcript_key
             and not self.semantic_worker_has_pending_jobs()
+            and not self.semantic_check_in_flight
         )
 
     def queue_semantic_endpoint_check(self) -> None:
-        """Queue semantic classification for the stabilized transcript text."""
+        """Queue semantic classification for the latest stabilized transcript text."""
         if self.semantic_job_queue is None:
             return
         self.semantic_check_queued_this_pause = True
+        self.semantic_check_in_flight = True
+        self.last_semantic_transcript_key = self.locked_transcript_key
         self.semantic_job_queue.put(
             SemanticEndpointJob(
                 segment_index=self.segment_index,
                 pause_index=self.semantic_pause_index,
-                transcript=self.latest_transcript,
+                transcript=self.locked_transcript,
+                transcript_key=self.locked_transcript_key,
             )
         )
         logger.info(
-            "Semantic endpoint check queued after {:g}s pause with {}/{} transcript agreements.",
-            self.semantic_silence_seconds,
+            "Semantic check queued for stabilized transcript with n agreement = {}.",
             self.transcript_agreements,
-            self.transcript_agreement_count,
         )
 
     def handle_semantic_endpoint_results(self) -> bool:
@@ -478,6 +535,7 @@ class StreamSegmenter:
                     result.pause_index,
                 )
                 continue
+            self.semantic_check_in_flight = False
 
             if result.is_rejected:
                 logger.debug(
@@ -487,16 +545,17 @@ class StreamSegmenter:
                 continue
 
             if not result.is_complete:
-                logger.debug("Semantic endpoint check: incomplete; waiting for more speech.")
+                logger.info("Semantic INCOMPLETE for current transcript buffer.")
+                if result.transcript_key == self.locked_transcript_key:
+                    self.last_semantic_transcript_key = ""
                 continue
 
-            logger.info(
-                "Audio segment trigger: semantic completion after {:g}s pause.",
-                self.semantic_silence_seconds,
-            )
-            self.pending_completion_reason = (
-                f"semantic completion after {self.semantic_silence_seconds:g}s pause"
-            )
+            if result.transcript_key and result.transcript_key != self.locked_transcript_key:
+                logger.info("Semantic COMPLETE ignored because transcript buffer changed.")
+                continue
+
+            logger.info("Semantic COMPLETE for current transcript buffer.")
+            self.pending_completion_reason = "semantic completion from transcript buffer"
             self.finish_segment_and_reset()
             return True
 
@@ -506,7 +565,6 @@ class StreamSegmenter:
             result.segment_index != self.segment_index
             or result.pause_index != self.semantic_pause_index
         )
-
 
 def stream_utterance_segments(
     output_dir: Path,

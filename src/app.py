@@ -71,11 +71,10 @@ def stream_loop(options: RuntimeOptions) -> None:
         segment_queue: queue.Queue[CompletedStreamSegment | Exception] = queue.Queue()
         stop_event = threading.Event()
         semantic_endpoint_detector = OllamaSemanticEndpointDetector()
-        use_local_transcription_cache = options.ask_chatgpt
         stream_transcription_model = model_path_for_run(
             DEFAULT_ENDPOINT_TRANSCRIPTION_BACKEND,
             DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL,
-            use_local_cache=use_local_transcription_cache,
+            use_local_cache=True,
         )
         stream_transcriber = create_transcriber(
             DEFAULT_ENDPOINT_TRANSCRIPTION_BACKEND,
@@ -242,22 +241,16 @@ def print_speaker_hint(speaker_hint: SpeakerHint) -> None:
 
 def print_stream_mode_banner(options: RuntimeOptions) -> None:
     """Print the active stream-mode trigger settings."""
-    logger.info("Stream mode is active.")
     logger.info(
         "Audio segments end after semantic completion or {:g}s hard silence.",
         STREAM_HARD_SILENCE_SECONDS,
     )
     logger.debug(
-        "Semantic endpoint check: {:g}s pause via local Ollama qwen2.5:1.5b",
-        STREAM_SEMANTIC_SILENCE_SECONDS,
+        "Semantic endpoint check: stabilized transcript buffer via local Ollama qwen2.5:1.5b"
     )
+    logger.info("Streaming transcription: {}", stream_transcription_label())
     logger.info(
-        "Streaming transcription: {} {}",
-        DEFAULT_ENDPOINT_TRANSCRIPTION_BACKEND,
-        DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL,
-    )
-    logger.info(
-        "Transcript stabilization: {} matching drafts before semantic check",
+        "n agreement = {}",
         STREAM_TRANSCRIPT_AGREEMENT_COUNT,
     )
     if options.photo_mode != "none":
@@ -275,13 +268,17 @@ def print_stream_mode_banner(options: RuntimeOptions) -> None:
     else:
         logger.info("Photo upload: disabled")
         logger.debug("Photo capture: disabled")
-    logger.debug("Recording continues while segments are transcribed")
     if options.ask_chatgpt:
         logger.info("ChatGPT submission: enabled")
-        logger.debug("Segment role detection: delegated to ChatGPT")
     else:
         logger.info("ChatGPT submission: disabled")
-    logger.info("Press Ctrl+C to stop.")
+
+
+def stream_transcription_label() -> str:
+    """Return a compact transcription backend+model label for logs."""
+    model = DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL.lower()
+    size = "tiny" if "tiny" in model else DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL
+    return f"{DEFAULT_ENDPOINT_TRANSCRIPTION_BACKEND} {size}"
 
 
 def print_transcript(transcript: str) -> None:

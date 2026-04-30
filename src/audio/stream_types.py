@@ -26,6 +26,8 @@ class TranscriptionJob:
 
     segment_index: int
     pause_index: int
+    start_chunk_index: int
+    end_chunk_index: int
     chunks: list[bytes]
 
 
@@ -37,6 +39,8 @@ class TranscriptionResult:
     is_rejected: bool = False
     segment_index: int = -1
     pause_index: int = -1
+    start_chunk_index: int = 0
+    end_chunk_index: int = 0
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,7 @@ class SemanticEndpointJob:
     segment_index: int
     pause_index: int
     transcript: str
+    transcript_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -57,6 +62,7 @@ class SemanticEndpointResult:
     is_rejected: bool = False
     segment_index: int = -1
     pause_index: int = -1
+    transcript_key: str = ""
 
 
 SemanticEndpointDetector = Callable[[str], SemanticEndpointResult]

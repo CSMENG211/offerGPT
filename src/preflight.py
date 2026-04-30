@@ -21,7 +21,6 @@ def check_runtime_dependencies(options: PreflightOptions) -> None:
     if options.enroll_me:
         return
 
-    logger.info("Running startup dependency checks...")
     checks_passed = True
 
     if not ollama_model_is_ready():
@@ -33,8 +32,6 @@ def check_runtime_dependencies(options: PreflightOptions) -> None:
     if not checks_passed:
         logger.error("Startup checks failed. Aborting before microphone capture.")
         raise SystemExit(1)
-
-    logger.info("Startup dependency checks passed.")
 
 
 def ollama_model_is_ready() -> bool:
@@ -74,5 +71,4 @@ def cdp_browser_is_ready() -> bool:
         )
         return False
 
-    logger.info("Chrome CDP ready: {}", DEFAULT_CDP_URL)
     return True

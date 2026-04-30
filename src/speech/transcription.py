@@ -48,7 +48,14 @@ def model_path_for_run(backend: str, model: str, *, use_local_cache: bool) -> st
     if model_path.exists():
         return str(model_path)
 
-    return cached_huggingface_snapshot_path(model)
+    try:
+        return cached_huggingface_snapshot_path(model)
+    except RuntimeError:
+        logger.warning(
+            "Local MLX cache miss for {}. Falling back to model repo reference.",
+            model,
+        )
+        return model
 
 
 def cached_huggingface_snapshot_path(repo_id: str) -> str:
@@ -126,9 +133,9 @@ class MlxWhisperTranscriber:
         self.model = model
         self._lock = threading.Lock()
         if Path(model).expanduser().exists():
-            logger.info("Configured mlx-whisper model from local cache: {}", model)
+            logger.debug("Configured mlx-whisper model from local cache: {}", model)
         else:
-            logger.info(
+            logger.debug(
                 "Configured mlx-whisper model {}. The first transcription may download model files.",
                 model,
             )

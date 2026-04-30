@@ -38,6 +38,8 @@ def run_transcription_worker(
                 is_rejected=False,
                 segment_index=job.segment_index,
                 pause_index=job.pause_index,
+                start_chunk_index=job.start_chunk_index,
+                end_chunk_index=job.end_chunk_index,
             )
         except Exception as error:
             logger.warning("Streaming transcription check failed: {}", error)
@@ -46,6 +48,8 @@ def run_transcription_worker(
                 is_rejected=True,
                 segment_index=job.segment_index,
                 pause_index=job.pause_index,
+                start_chunk_index=job.start_chunk_index,
+                end_chunk_index=job.end_chunk_index,
             )
         finally:
             draft_path.unlink(missing_ok=True)
@@ -81,5 +85,6 @@ def run_semantic_endpoint_worker(
                 is_rejected=endpoint_result.is_rejected,
                 segment_index=job.segment_index,
                 pause_index=job.pause_index,
+                transcript_key=job.transcript_key,
             )
         )

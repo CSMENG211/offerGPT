@@ -1,6 +1,12 @@
 import argparse
+import os
 import sys
 from pathlib import Path
+
+# Keep third-party model/download progress bars out of terminal logs.
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("TQDM_DISABLE", "1")
+os.environ.setdefault("DISABLE_TQDM", "1")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
