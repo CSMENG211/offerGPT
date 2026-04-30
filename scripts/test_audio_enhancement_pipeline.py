@@ -92,6 +92,8 @@ def test_transcription_worker_uses_snapshot_audio_and_cleans_temp_files() -> Non
             TranscriptionJob(
                 segment_index=1,
                 pause_index=2,
+                start_chunk_index=0,
+                end_chunk_index=1,
                 chunks=[silent_chunk()],
             )
         )
@@ -126,6 +128,7 @@ def test_semantic_worker_classifies_stabilized_text() -> None:
             segment_index=1,
             pause_index=2,
             transcript="stable answer",
+            transcript_key="stable answer",
         )
     )
     job_queue.put(None)

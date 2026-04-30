@@ -374,13 +374,6 @@ Audio capture, segmentation, WAV writing, and amplitude helpers. `src/audio/__in
 
 - `capture_enrollment_utterance(...)`: Records one voice-enrollment sentence using speech-start and silence-stop triggers.
 
-#### `src/audio/enhancement.py`
-
-- `AudioEnhancementConfig`: Selects whether manual transcription/benchmark audio is enhanced.
-- `enhance_wav(...)`: Loads a mono 16 kHz PCM WAV, runs non-stationary spectral gating through `noisereduce`, writes an enhanced int16 WAV, and falls back to the raw path if enhancement fails.
-- The main live stream path no longer depends on a second enhanced final-ASR pass. Voice matching still uses raw microphone audio.
-- macOS Voice Isolation can be tried manually from the menu bar Mic Mode control while audio is active, but Apple makes Mic Modes app-dependent. SecondVoice does not rely on it for CLI recording.
-
 #### `src/audio/segmenter.py`
 
 - `StreamSpeechDetector`: Stream-only RMS detector with hysteresis: the normal threshold starts recording, a lower continuation threshold keeps active speech alive, and a short hangover protects word/syllable gaps.

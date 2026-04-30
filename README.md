@@ -104,13 +104,6 @@ Benchmark transcription on a saved WAV file:
 .venv/bin/python scripts/benchmark_transcriber.py --backend faster-whisper --model small.en /path/to/sample.wav
 ```
 
-Benchmark audio enhancement with macOS `say` and synthetic background noise:
-
-```sh
-.venv/bin/python scripts/benchmark_audio_enhancement.py --noise-kind keyboard --snr-db 10
-.venv/bin/python scripts/benchmark_audio_enhancement.py --no-transcribe --output-dir /tmp/secondvoice-audio-bench
-```
-
 Run the browser smoke test:
 
 ```sh
@@ -124,5 +117,4 @@ Run the browser smoke test:
 - On macOS, your terminal may ask for microphone permission on the first run.
 - On macOS, Voice Isolation can sometimes be enabled from the menu bar Mic Mode
   control while an app is using the microphone. Treat it as an optional extra:
-  Apple makes Mic Modes app-dependent, so SecondVoice does its own in-app audio
-  enhancement instead of relying on a system mode being available to the CLI.
+  Apple makes Mic Modes app-dependent, so availability can vary by app.
