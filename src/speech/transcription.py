@@ -1,3 +1,5 @@
+from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_stdout
+import os
 from pathlib import Path
 import threading
 from typing import Protocol
@@ -154,7 +156,8 @@ class MlxWhisperTranscriber:
             if log_progress:
                 logger.info("Decoding audio with mlx-whisper...")
 
-            result = self._transcribe_with_prompt(mlx_whisper, audio_path)
+            with suppress_third_party_output(enabled=not log_progress):
+                result = self._transcribe_with_prompt(mlx_whisper, audio_path)
             text = str(result.get("text", "")).strip()
 
             if log_progress:
@@ -201,3 +204,16 @@ def load_wav_as_float32(audio_path: Path):
 
 
 LocalTranscriber = FasterWhisperTranscriber
+
+
+@contextmanager
+def suppress_third_party_output(*, enabled: bool):
+    """Suppress noisy third-party progress bars written to stdout/stderr."""
+    if not enabled:
+        with nullcontext():
+            yield
+        return
+
+    with open(os.devnull, "w", encoding="utf-8") as sink:
+        with redirect_stdout(sink), redirect_stderr(sink):
+            yield

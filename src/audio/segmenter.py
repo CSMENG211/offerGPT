@@ -34,7 +34,6 @@ from audio.constants import (
     AUDIO_SAMPLE_RATE,
     DEFAULT_SILENCE_THRESHOLD,
     STREAM_HARD_SILENCE_SECONDS,
-    STREAM_SEMANTIC_SILENCE_SECONDS,
     STREAM_TRANSCRIPTION_INTERVAL_SECONDS,
     STREAM_TRANSCRIPT_AGREEMENT_COUNT,
     STREAM_SPEECH_CONTINUE_THRESHOLD_RATIO,
@@ -97,7 +96,6 @@ class StreamSegmenter:
         transcriber: StreamingTranscriber,
         hard_silence_seconds: float = STREAM_HARD_SILENCE_SECONDS,
         silence_threshold: int = DEFAULT_SILENCE_THRESHOLD,
-        semantic_silence_seconds: float = STREAM_SEMANTIC_SILENCE_SECONDS,
         semantic_endpoint_detector: SemanticEndpointDetector | None = None,
         transcription_interval_seconds: float = STREAM_TRANSCRIPTION_INTERVAL_SECONDS,
         transcript_agreement_count: int = STREAM_TRANSCRIPT_AGREEMENT_COUNT,
@@ -108,7 +106,6 @@ class StreamSegmenter:
         self.transcriber = transcriber
         self.hard_silence_seconds = hard_silence_seconds
         self.silence_threshold = silence_threshold
-        self.semantic_silence_seconds = semantic_silence_seconds
         self.semantic_endpoint_detector = semantic_endpoint_detector
         self.transcription_interval_blocks = block_count_for_seconds(
             transcription_interval_seconds
@@ -118,14 +115,10 @@ class StreamSegmenter:
 
         self.blocksize = audio_blocksize()
         self.hard_silence_blocks_needed = block_count_for_seconds(hard_silence_seconds)
-        self.semantic_silence_blocks_needed = block_count_for_seconds(
-            semantic_silence_seconds
-        )
         self.pre_roll = create_pre_roll_buffer()
         self.recorded_chunks: list[bytes] = []
         self.segment_chunks = 0
         self.silent_blocks = 0
-        self.semantic_check_queued_this_pause = False
         self.semantic_check_in_flight = False
         self.semantic_pause_index = 0
         self.last_transcription_job_chunks = 0
@@ -260,7 +253,6 @@ class StreamSegmenter:
         self.write_segment_chunks(self.pre_roll)
         self.segment_chunks = len(self.pre_roll)
         self.silent_blocks = 0
-        self.semantic_check_queued_this_pause = False
         self.semantic_check_in_flight = False
         self.last_transcription_job_chunks = 0
         self.last_seen_transcript_key = ""
@@ -282,7 +274,6 @@ class StreamSegmenter:
         self.finish_segment()
         self.recording_started = False
         self.silent_blocks = 0
-        self.semantic_check_queued_this_pause = False
         self.semantic_check_in_flight = False
         self.last_transcription_job_chunks = 0
         self.last_seen_transcript_key = ""
@@ -337,10 +328,9 @@ class StreamSegmenter:
     def update_silence_state(self, is_speech: bool) -> None:
         """Update silence counters and pause identity."""
         if is_speech:
-            if self.silent_blocks > 0 or self.semantic_check_queued_this_pause:
+            if self.silent_blocks > 0 or self.semantic_check_in_flight:
                 self.semantic_pause_index += 1
             self.silent_blocks = 0
-            self.semantic_check_queued_this_pause = False
             self.semantic_check_in_flight = False
         else:
             self.silent_blocks += 1
@@ -499,7 +489,6 @@ class StreamSegmenter:
         """Queue semantic classification for the latest stabilized transcript text."""
         if self.semantic_job_queue is None:
             return
-        self.semantic_check_queued_this_pause = True
         self.semantic_check_in_flight = True
         self.last_semantic_transcript_key = self.locked_transcript_key
         self.semantic_job_queue.put(
@@ -573,7 +562,6 @@ def stream_utterance_segments(
     transcriber: StreamingTranscriber,
     hard_silence_seconds: float = STREAM_HARD_SILENCE_SECONDS,
     silence_threshold: int = DEFAULT_SILENCE_THRESHOLD,
-    semantic_silence_seconds: float = STREAM_SEMANTIC_SILENCE_SECONDS,
     semantic_endpoint_detector: SemanticEndpointDetector | None = None,
     transcription_interval_seconds: float = STREAM_TRANSCRIPTION_INTERVAL_SECONDS,
     transcript_agreement_count: int = STREAM_TRANSCRIPT_AGREEMENT_COUNT,
@@ -586,7 +574,6 @@ def stream_utterance_segments(
         transcriber=transcriber,
         hard_silence_seconds=hard_silence_seconds,
         silence_threshold=silence_threshold,
-        semantic_silence_seconds=semantic_silence_seconds,
         semantic_endpoint_detector=semantic_endpoint_detector,
         transcription_interval_seconds=transcription_interval_seconds,
         transcript_agreement_count=transcript_agreement_count,

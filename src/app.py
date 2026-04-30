@@ -15,7 +15,6 @@ from audio import (
 from audio.constants import (
     DEFAULT_SILENCE_THRESHOLD,
     STREAM_HARD_SILENCE_SECONDS,
-    STREAM_SEMANTIC_SILENCE_SECONDS,
     STREAM_TRANSCRIPT_AGREEMENT_COUNT,
 )
 from gpt import submit_to_chatgpt
@@ -137,7 +136,6 @@ def start_stream_recorder(
             transcriber,
             STREAM_HARD_SILENCE_SECONDS,
             DEFAULT_SILENCE_THRESHOLD,
-            STREAM_SEMANTIC_SILENCE_SECONDS,
             semantic_endpoint_detector.classify_transcript,
         ),
     )
