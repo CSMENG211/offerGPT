@@ -1,7 +1,5 @@
 import json
-import threading
 import time
-from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -17,25 +15,13 @@ from speech.constants import (
     OLLAMA_KEEP_ALIVE,
     OLLAMA_REQUEST_TIMEOUT_SECONDS,
 )
-from speech.transcription import Transcriber
 
 
 class OllamaSemanticEndpointDetector:
-    """Draft-audio endpoint detector backed by local transcription and Ollama."""
+    """Semantic endpoint detector backed by local Ollama classification."""
 
     def __init__(self, model: str = DEFAULT_ENDPOINT_MODEL) -> None:
         self.model = model
-        self._transcriber: Transcriber | None = None
-        self._lock = threading.Lock()
-
-    def set_transcriber(self, transcriber: Transcriber) -> None:
-        """Attach the shared transcriber once Whisper has loaded."""
-        with self._lock:
-            self._transcriber = transcriber
-
-    def is_complete(self, audio_path: Path) -> bool:
-        """Return True only when the draft audio is confidently complete."""
-        return self.detect(audio_path).is_complete
 
     def classify_transcript(self, transcript: str) -> SemanticEndpointResult:
         """Return whether a transcript is semantically complete."""
@@ -82,20 +68,6 @@ class OllamaSemanticEndpointDetector:
             transcript=transcript,
             is_rejected=False,
         )
-
-    def detect(self, audio_path: Path) -> SemanticEndpointResult:
-        """Return the draft transcript and whether it is confidently complete."""
-        transcriber = self._current_transcriber()
-        if transcriber is None:
-            logger.debug("Semantic endpoint check skipped; transcriber is not ready.")
-            return SemanticEndpointResult(is_complete=False)
-
-        transcript = transcriber.transcribe(audio_path, log_progress=False)
-        return self.classify_transcript(transcript)
-
-    def _current_transcriber(self) -> Transcriber | None:
-        with self._lock:
-            return self._transcriber
 
 
 def classify_endpoint_transcript(

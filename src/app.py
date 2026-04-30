@@ -50,7 +50,6 @@ class RuntimeOptions:
     ask_chatgpt: bool = True
     enroll_me: bool = False
     photo_mode: PhotoMode = "none"
-    audio_enhancement: bool = True
 
 
 def run(options: RuntimeOptions) -> None:

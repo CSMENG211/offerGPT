@@ -412,14 +412,12 @@ Current CLI flags:
 - `--no-ask`: Turns off ChatGPT submission while keeping capture and transcription active.
 - `--enroll`: Runs voice enrollment instead of stream mode.
 - `--photo-mode`: Selects `none`, `test`, or `live` photo behavior.
-- `--no-audio-enhancement`: Disables transcription preprocessing, which is enabled by default.
 
 ### `src/preflight.py`
 
 Startup dependency checks.
 
 - `check_runtime_dependencies(options)`: Runs all required startup checks and aborts before microphone capture when a dependency is missing.
-- `audio_enhancement_is_ready()`: Checks that `noisereduce` is importable when enhancement is enabled.
 - `ollama_model_is_ready()`: Checks that Ollama is reachable and `qwen2.5:1.5b` is installed.
 - `cdp_browser_is_ready()`: Checks that Chrome CDP is reachable for ChatGPT submission runs.
 

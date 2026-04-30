@@ -45,22 +45,11 @@ def parse_args() -> RuntimeOptions:
             "live captures to /Users/flora/interview/live.jpg. Default: none."
         ),
     )
-    parser.add_argument(
-        "--no-audio-enhancement",
-        action="store_false",
-        dest="audio_enhancement",
-        default=True,
-        help=(
-            "Retained for compatibility. The live streaming path no longer uses "
-            "a separate enhancement pass."
-        ),
-    )
     args = parser.parse_args()
     return RuntimeOptions(
         ask_chatgpt=args.ask_chatgpt,
         enroll_me=args.enroll,
         photo_mode=args.photo_mode,
-        audio_enhancement=args.audio_enhancement,
     )
 
 

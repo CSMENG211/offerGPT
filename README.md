@@ -77,12 +77,6 @@ Run without photo capture or upload:
 .venv/bin/python main.py --no-ask --photo-mode none
 ```
 
-Compare transcription with raw, unenhanced audio:
-
-```sh
-.venv/bin/python main.py --no-ask --no-audio-enhancement
-```
-
 Record an interviewee voice profile:
 
 ```sh

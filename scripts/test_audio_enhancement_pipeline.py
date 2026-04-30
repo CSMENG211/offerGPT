@@ -7,8 +7,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import app
-import audio.segmenter as segmenter
-from audio import CompletedStreamSegment, SemanticEndpointJob, TranscriptionJob
+from audio import (
+    CompletedStreamSegment,
+    SemanticEndpointJob,
+    SemanticEndpointResult,
+    TranscriptionJob,
+    TranscriptionResult,
+    run_semantic_endpoint_worker,
+    run_transcription_worker,
+)
 from audio.levels import audio_blocksize
 from audio.wav import write_wav_file
 from speech import SpeakerHint
@@ -68,11 +75,11 @@ def test_transcription_worker_uses_snapshot_audio_and_cleans_temp_files() -> Non
     with tempfile.TemporaryDirectory() as temp_dir:
         output_dir = Path(temp_dir)
         job_queue: queue.Queue[TranscriptionJob | None] = queue.Queue()
-        result_queue: queue.Queue[segmenter.TranscriptionResult] = queue.Queue()
+        result_queue: queue.Queue[TranscriptionResult] = queue.Queue()
         transcriber = RecordingTranscriber()
 
         worker = threading.Thread(
-            target=segmenter.run_transcription_worker,
+            target=run_transcription_worker,
             args=(
                 output_dir,
                 job_queue,
@@ -99,14 +106,14 @@ def test_transcription_worker_uses_snapshot_audio_and_cleans_temp_files() -> Non
 
 def test_semantic_worker_classifies_stabilized_text() -> None:
     job_queue: queue.Queue[SemanticEndpointJob | None] = queue.Queue()
-    result_queue: queue.Queue[segmenter.SemanticEndpointResult] = queue.Queue()
+    result_queue: queue.Queue[SemanticEndpointResult] = queue.Queue()
 
-    def detector(transcript: str) -> segmenter.SemanticEndpointResult:
+    def detector(transcript: str) -> SemanticEndpointResult:
         assert transcript == "stable answer"
-        return segmenter.SemanticEndpointResult(is_complete=True, transcript=transcript)
+        return SemanticEndpointResult(is_complete=True, transcript=transcript)
 
     worker = threading.Thread(
-        target=segmenter.run_semantic_endpoint_worker,
+        target=run_semantic_endpoint_worker,
         args=(
             job_queue,
             result_queue,

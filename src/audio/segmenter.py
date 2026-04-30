@@ -1,9 +1,6 @@
 from collections.abc import Iterable
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Protocol
 import queue
-import re
 import threading
 import wave
 
@@ -16,90 +13,33 @@ from audio.levels import (
     create_pre_roll_buffer,
     rms_level,
 )
-from audio.wav import open_wav_writer, write_wav_file
+from audio.stream_types import (
+    CompletedStreamSegment,
+    SemanticEndpointDetector,
+    SemanticEndpointJob,
+    SemanticEndpointResult,
+    StreamingTranscriber,
+    TranscriptionJob,
+    TranscriptionResult,
+)
+from audio.stream_workers import run_semantic_endpoint_worker, run_transcription_worker
+from audio.transcript_utils import (
+    TRANSCRIPT_WORD_PATTERN,
+    trim_repetitive_transcript_suffix,
+)
+from audio.wav import open_wav_writer
 from audio.constants import (
     AUDIO_CHANNELS,
     AUDIO_CHUNK_SECONDS,
     AUDIO_SAMPLE_RATE,
     DEFAULT_SILENCE_THRESHOLD,
-    STREAM_ENDPOINT_DRAFT_SECONDS,
     STREAM_HARD_SILENCE_SECONDS,
-    STREAM_MAX_SEGMENT_SECONDS,
     STREAM_SEMANTIC_SILENCE_SECONDS,
     STREAM_TRANSCRIPTION_INTERVAL_SECONDS,
     STREAM_TRANSCRIPT_AGREEMENT_COUNT,
     STREAM_SPEECH_CONTINUE_THRESHOLD_RATIO,
     STREAM_SPEECH_HANGOVER_SECONDS,
 )
-
-SemanticEndpointDetector = Callable[[str], "SemanticEndpointResult"]
-TRANSCRIPT_WORD_PATTERN = re.compile(r"[a-z0-9]+(?:'[a-z0-9]+)?")
-
-
-class StreamingTranscriber(Protocol):
-    """Common interface for the recorder's single streaming ASR path."""
-
-    def transcribe(self, audio_path: Path, *, log_progress: bool = True) -> str:
-        """Transcribe a WAV file and return plain text."""
-        ...
-
-
-@dataclass(frozen=True)
-class CompletedStreamSegment:
-    """Recorded stream segment plus the trigger that ended it."""
-
-    path: Path
-    completion_reason: str
-    transcript: str = ""
-
-
-@dataclass(frozen=True)
-class TranscriptionJob:
-    """Snapshot of an in-progress segment to transcribe off the recorder thread."""
-
-    segment_index: int
-    pause_index: int
-    chunks: list[bytes]
-
-
-@dataclass(frozen=True)
-class TranscriptionResult:
-    """Transcript result for one queued draft segment snapshot."""
-
-    transcript: str = ""
-    is_rejected: bool = False
-    segment_index: int = -1
-    pause_index: int = -1
-
-
-@dataclass(frozen=True)
-class SemanticEndpointJob:
-    """Stabilized transcript submitted for semantic completion classification."""
-
-    segment_index: int
-    pause_index: int
-    transcript: str
-
-
-@dataclass(frozen=True)
-class SemanticEndpointResult:
-    """Semantic completion result for one stabilized transcript."""
-
-    is_complete: bool
-    transcript: str = ""
-    is_rejected: bool = False
-    segment_index: int = -1
-    pause_index: int = -1
-
-
-@dataclass(frozen=True)
-class TranscriptWord:
-    """Normalized transcript token plus its source span."""
-
-    text: str
-    start: int
-    end: int
-
 
 class StreamSpeechDetector:
     """Speech activity detector with separate start/continue thresholds."""
@@ -159,8 +99,6 @@ class StreamSegmenter:
         silence_threshold: int = DEFAULT_SILENCE_THRESHOLD,
         semantic_silence_seconds: float = STREAM_SEMANTIC_SILENCE_SECONDS,
         semantic_endpoint_detector: SemanticEndpointDetector | None = None,
-        max_segment_seconds: float = STREAM_MAX_SEGMENT_SECONDS,
-        endpoint_draft_seconds: float = STREAM_ENDPOINT_DRAFT_SECONDS,
         transcription_interval_seconds: float = STREAM_TRANSCRIPTION_INTERVAL_SECONDS,
         transcript_agreement_count: int = STREAM_TRANSCRIPT_AGREEMENT_COUNT,
     ) -> None:
@@ -172,8 +110,6 @@ class StreamSegmenter:
         self.silence_threshold = silence_threshold
         self.semantic_silence_seconds = semantic_silence_seconds
         self.semantic_endpoint_detector = semantic_endpoint_detector
-        self.max_segment_seconds = max_segment_seconds
-        self.endpoint_draft_blocks = block_count_for_seconds(endpoint_draft_seconds)
         self.transcription_interval_blocks = block_count_for_seconds(
             transcription_interval_seconds
         )
@@ -379,10 +315,6 @@ class StreamSegmenter:
         """Return the current consecutive silence duration."""
         return self.silent_blocks * AUDIO_CHUNK_SECONDS
 
-    def current_segment_seconds(self) -> float:
-        """Return the current segment duration, including pre-roll."""
-        return self.segment_chunks * AUDIO_CHUNK_SECONDS
-
     def update_silence_state(self, is_speech: bool) -> None:
         """Update silence counters and pause identity."""
         if is_speech:
@@ -427,18 +359,6 @@ class StreamSegmenter:
     def semantic_worker_has_pending_jobs(self) -> bool:
         """Return whether the semantic worker queue already has pending work."""
         return self.semantic_job_queue is not None and not self.semantic_job_queue.empty()
-
-    def accept_fallback(self, reason: str) -> bool:
-        """Accept the current stabilized transcript and queue the segment."""
-        silence_seconds = self.current_silence_seconds()
-        logger.info(
-            "Audio segment trigger: {} after {:.1f}s silence.",
-            reason,
-            silence_seconds,
-        )
-        self.pending_completion_reason = f"{silence_seconds:.1f}s silence fallback"
-        self.finish_segment_and_reset()
-        return True
 
     def accept_hard_silence(self) -> None:
         """Force the segment to end once hard silence is reached."""
@@ -597,8 +517,6 @@ def stream_utterance_segments(
     silence_threshold: int = DEFAULT_SILENCE_THRESHOLD,
     semantic_silence_seconds: float = STREAM_SEMANTIC_SILENCE_SECONDS,
     semantic_endpoint_detector: SemanticEndpointDetector | None = None,
-    max_segment_seconds: float = STREAM_MAX_SEGMENT_SECONDS,
-    endpoint_draft_seconds: float = STREAM_ENDPOINT_DRAFT_SECONDS,
     transcription_interval_seconds: float = STREAM_TRANSCRIPTION_INTERVAL_SECONDS,
     transcript_agreement_count: int = STREAM_TRANSCRIPT_AGREEMENT_COUNT,
 ) -> None:
@@ -612,212 +530,6 @@ def stream_utterance_segments(
         silence_threshold=silence_threshold,
         semantic_silence_seconds=semantic_silence_seconds,
         semantic_endpoint_detector=semantic_endpoint_detector,
-        max_segment_seconds=max_segment_seconds,
-        endpoint_draft_seconds=endpoint_draft_seconds,
         transcription_interval_seconds=transcription_interval_seconds,
         transcript_agreement_count=transcript_agreement_count,
     ).run()
-
-
-def run_transcription_worker(
-    output_dir: Path,
-    job_queue: queue.Queue[TranscriptionJob | None],
-    result_queue: queue.Queue[TranscriptionResult],
-    transcriber: StreamingTranscriber,
-) -> None:
-    """Run single-path streaming ASR on queued segment snapshots."""
-    while True:
-        job = job_queue.get()
-        if job is None:
-            return
-
-        draft_path = output_dir / (
-            f"stream-segment-{job.segment_index:04d}"
-            f"-transcription-check-{job.pause_index:04d}.wav"
-        )
-        try:
-            write_wav_file(draft_path, job.chunks)
-            transcript = transcriber.transcribe(draft_path, log_progress=False)
-            result = TranscriptionResult(
-                transcript=transcript,
-                is_rejected=False,
-                segment_index=job.segment_index,
-                pause_index=job.pause_index,
-            )
-        except Exception as error:
-            logger.warning("Streaming transcription check failed: {}", error)
-            result = TranscriptionResult(
-                transcript="",
-                is_rejected=True,
-                segment_index=job.segment_index,
-                pause_index=job.pause_index,
-            )
-        finally:
-            draft_path.unlink(missing_ok=True)
-
-        result_queue.put(result)
-
-
-def run_semantic_endpoint_worker(
-    job_queue: queue.Queue[SemanticEndpointJob | None],
-    result_queue: queue.Queue[SemanticEndpointResult],
-    semantic_endpoint_detector: SemanticEndpointDetector,
-) -> None:
-    """Run semantic endpoint checks away from the real-time recorder loop."""
-    while True:
-        job = job_queue.get()
-        if job is None:
-            return
-
-        try:
-            endpoint_result = semantic_endpoint_detector(job.transcript)
-        except Exception as error:
-            logger.warning("Semantic endpoint check failed: {}", error)
-            endpoint_result = SemanticEndpointResult(
-                is_complete=False,
-                segment_index=job.segment_index,
-                pause_index=job.pause_index,
-            )
-
-        result_queue.put(
-            SemanticEndpointResult(
-                is_complete=endpoint_result.is_complete,
-                transcript=endpoint_result.transcript,
-                is_rejected=endpoint_result.is_rejected,
-                segment_index=job.segment_index,
-                pause_index=job.pause_index,
-            )
-        )
-
-
-def normalize_transcript_words(transcript: str) -> list[str]:
-    """Return lowercase word tokens for transcript comparison."""
-    return [word.text for word in normalized_transcript_tokens(transcript)]
-
-
-def normalized_transcript_tokens(transcript: str) -> list[TranscriptWord]:
-    """Return lowercase word tokens with source spans."""
-    return [
-        TranscriptWord(match.group(0).lower(), match.start(), match.end())
-        for match in TRANSCRIPT_WORD_PATTERN.finditer(transcript.lower())
-    ]
-
-
-def is_repetitive_transcript(transcript: str) -> bool:
-    """Return whether a transcript looks like an ASR repetition loop."""
-    words = normalize_transcript_words(transcript)
-    return words_are_repetitive(words) or repetitive_suffix_start(words) is not None
-
-
-def words_are_repetitive(words: list[str], min_tokens: int = 20) -> bool:
-    """Return whether the full token sequence looks repetitive."""
-    return repetitive_window_start_offset(words, min_tokens=min_tokens) is not None
-
-
-def repetitive_window_start_offset(words: list[str], min_tokens: int = 20) -> int | None:
-    """Return the start of the repeated pattern inside a repetitive window."""
-    if len(words) < min_tokens:
-        return None
-
-    unique_ratio = len(set(words)) / len(words)
-    if unique_ratio <= 0.25:
-        return 0
-
-    if len(words) >= 20 and unique_ratio <= 0.35:
-        return 0
-
-    if unique_ratio <= 0.35:
-        return dominant_ngram_start(words, ngram_size=2, min_coverage=0.5)
-
-    if unique_ratio <= 0.45:
-        return dominant_ngram_start(words, ngram_size=3, min_coverage=0.5)
-
-    return None
-
-
-def trim_repetitive_transcript_suffix(transcript: str) -> str:
-    """Remove a trailing ASR repetition loop while preserving the meaningful prefix."""
-    tokens = normalized_transcript_tokens(transcript)
-    suffix_start = repetitive_suffix_start([token.text for token in tokens])
-    if suffix_start is None:
-        return transcript
-    if suffix_start == 0:
-        return ""
-    return transcript[: tokens[suffix_start].start].rstrip(" ,.;:-")
-
-
-def repetitive_suffix_start(
-    words: list[str],
-    min_window_tokens: int = 12,
-    min_prefix_tokens: int = 3,
-) -> int | None:
-    """Return the token index where a trailing repetition loop begins, if any."""
-    if len(words) < min_window_tokens:
-        return None
-
-    for start in range(0, len(words) - min_window_tokens + 1):
-        window = words[start : start + min_window_tokens]
-        window_offset = repetitive_window_start_offset(
-            window,
-            min_tokens=min_window_tokens,
-        )
-        if window_offset is None:
-            continue
-        suffix_start = start + window_offset
-        if suffix_start < min_prefix_tokens:
-            return 0
-        return suffix_start
-
-    return None
-
-
-def dominant_ngram_start(
-    words: list[str],
-    ngram_size: int,
-    min_coverage: float,
-) -> int | None:
-    """Return the first index of the most repeated n-gram when coverage is high."""
-    if len(words) < ngram_size:
-        return None
-
-    counts: dict[tuple[str, ...], int] = {}
-    first_indexes: dict[tuple[str, ...], int] = {}
-    for index in range(len(words) - ngram_size + 1):
-        ngram = tuple(words[index : index + ngram_size])
-        counts[ngram] = counts.get(ngram, 0) + 1
-        first_indexes.setdefault(ngram, index)
-
-    dominant_ngram, dominant_count = max(counts.items(), key=lambda item: item[1])
-    if dominant_count * ngram_size / len(words) < min_coverage:
-        return None
-    return first_indexes[dominant_ngram]
-
-
-def max_ngram_coverage(words: list[str], ngram_size: int = 3) -> float:
-    """Return the largest repeated n-gram coverage ratio for the words."""
-    if len(words) < ngram_size:
-        return 0.0
-
-    counts: dict[tuple[str, ...], int] = {}
-    for index in range(len(words) - ngram_size + 1):
-        ngram = tuple(words[index : index + ngram_size])
-        counts[ngram] = counts.get(ngram, 0) + 1
-
-    return max(counts.values()) * ngram_size / len(words)
-
-
-def new_transcript_words(previous_transcript: str, current_transcript: str) -> list[str]:
-    """Return tokens added after the longest common prefix."""
-    if is_repetitive_transcript(current_transcript):
-        return []
-
-    previous_words = normalize_transcript_words(previous_transcript)
-    current_words = normalize_transcript_words(current_transcript)
-    common_prefix_length = 0
-
-    for previous_word, current_word in zip(previous_words, current_words):
-        if previous_word != current_word:
-            break
-        common_prefix_length += 1
-
-    return current_words[common_prefix_length:]
