@@ -40,7 +40,7 @@ This is the default path.
 4. `start_stream_recorder()` starts a background thread running `audio.stream_utterance_segments()`.
 5. If photo capture is enabled, `photo.start_photo_timer()` starts a second background thread running `capture_photos_on_interval()`.
 6. The main thread loads the configured endpoint and final transcribers, `SpeakerIdentifier`, and `PhotoUploadTracker`.
-7. During recording, `StreamSegmenter` owns segment boundaries. It uses RMS speech activity, a single streaming transcription worker, transcript-agreement stabilization, and semantic endpoint checks on stabilized text after 1 second of silence. Transcript cleanup is deterministic: repeated ASR tails are trimmed before semantic classification or final submission; fully repetitive transcripts are skipped.
+7. During recording, `StreamSegmenter` owns segment boundaries. It uses RMS speech activity, a single streaming transcription worker, transcript-agreement stabilization, and semantic endpoint checks on the stabilized transcript buffer as it evolves. Transcript cleanup is deterministic: repeated ASR tails are trimmed before semantic classification or final submission; fully repetitive transcripts are skipped.
 8. For every queued completed segment, `process_stream_segment()`:
    - Builds a speaker hint from the WAV file.
    - Reads the stabilized transcript already attached to the completed segment.
@@ -168,13 +168,13 @@ While a segment is active, the recorder periodically snapshots the current audio
 
 ### 4. Semantic Endpoint Check
 
-After `STREAM_SEMANTIC_SILENCE_SECONDS`, currently 1 second, if the current transcript is stabilized, the recorder queues a semantic endpoint check using the transcript text itself. The semantic worker asks Ollama `qwen2.5:1.5b` whether that stabilized transcript is `COMPLETE` or `INCOMPLETE`.
+When the stabilized transcript buffer changes (after `n`-agreement), the recorder queues a semantic endpoint check using the locked transcript text itself. The semantic worker asks Ollama `qwen2.5:1.5b` whether that stabilized transcript is `COMPLETE` or `INCOMPLETE`.
 
-The recorder accepts only current results. Each job/result carries `segment_index` and `pause_index`; if the speaker resumed, a newer pause began, or the segment already ended, the old result is stale and ignored. Anything other than a current `COMPLETE` result keeps recording active.
+The recorder accepts only current results. Each job/result carries `segment_index` and `pause_index`; if the segment already ended or a newer pause began, the old result is stale and ignored. A `COMPLETE` result is accepted only when it still matches the current locked transcript key; if newer stabilized text arrived, that old `COMPLETE` result is ignored.
 
 ### 5. Hard Silence
 
-If no semantic endpoint is accepted, the recorder reaches `STREAM_HARD_SILENCE_SECONDS`, currently 3 seconds, and cuts the segment immediately using the latest stabilized transcript it has. This keeps the segmenter responsive without paying for a second full-pass transcription after the cut.
+If no semantic endpoint is accepted first, the recorder reaches `STREAM_HARD_SILENCE_SECONDS`, currently 3 seconds, and cuts the segment immediately using the latest cleaned transcript it has. This keeps the segmenter responsive without paying for a second full-pass transcription after the cut.
 
 ## Threading Model
 
@@ -230,18 +230,18 @@ This replaces the older dual-pass model. There is no second full transcription p
 
 ```text
 Recorder thread
-  after semantic silence threshold, if transcript is stabilized
-  puts SemanticEndpointJob(transcript text) into semantic_job_queue
+  when stabilized transcript buffer changes
+  puts SemanticEndpointJob(transcript text, transcript_key) into semantic_job_queue
         |
         v
 Semantic worker thread
   classifies transcript COMPLETE vs INCOMPLETE via Ollama
-  puts SemanticEndpointResult into semantic_result_queue
+  puts SemanticEndpointResult (including transcript_key) into semantic_result_queue
         |
         v
 Recorder thread
   accepts only current (non-stale) results
-  cuts segment only on current COMPLETE
+  cuts segment only on current COMPLETE for current locked transcript key
 ```
 
 Each semantic job/result includes `segment_index` and `pause_index`. Results are ignored when stale (speaker resumed, a newer pause started, or the segment already ended).
@@ -253,28 +253,35 @@ These examples use `segment_index=5` and start with `pause_index=10`. Times are 
 ### Semantic Completion
 
 ```text
-t+0.0  silence starts
-t+1.0  semantic job queued for segment 5, pause 10
-t+1.6  semantic result returns COMPLETE for segment 5, pause 10
-t+1.6  recorder accepts result and cuts segment
+t+0.0  stabilized transcript key changes
+t+0.0  semantic job queued for segment 5, pause 10, key K1
+t+0.6  semantic result returns COMPLETE for segment 5, pause 10, key K1
+t+0.6  recorder accepts result and cuts segment
 ```
 
 ### Stale Semantic Result
 
 ```text
-t+0.0  silence starts
-t+1.0  semantic job queued for segment 5, pause 10
-t+1.2  speaker resumes; recorder increments pause_index to 11
-t+1.6  old semantic result returns COMPLETE for segment 5, pause 10
-t+1.6  recorder ignores stale result
+t+0.0  stabilized transcript key changes
+t+0.0  semantic job queued for segment 5, pause 10, key K1
+t+0.3  speaker resumes; recorder increments pause_index to 11
+t+0.6  old semantic result returns COMPLETE for segment 5, pause 10, key K1
+t+0.6  recorder ignores stale result
+```
+
+### Key-Mismatch Semantic Result
+
+```text
+t+0.0  semantic job queued with key K1
+t+0.2  newer stabilized text arrives; key becomes K2
+t+0.6  semantic result returns COMPLETE for key K1
+t+0.6  recorder ignores result because current key is K2
 ```
 
 ### Hard Silence Cut
 
 ```text
-t+0.0  silence starts
-t+1.0  semantic job queued for segment 5, pause 10
-t+1.7  semantic result returns INCOMPLETE
+t+0.0  segment remains active with no accepted COMPLETE result
 t+3.0  hard silence reached; recorder cuts segment
 ```
 
@@ -397,7 +404,7 @@ Audio capture, segmentation, WAV writing, and amplitude helpers. `src/audio/__in
 #### `src/audio/transcript_utils.py`
 
 - `trim_repetitive_transcript_suffix(...)`: Removes repeated ASR suffix loops while preserving useful prefixes.
-- `normalize_transcript_for_agreement(...)`: Normalizes transcript text for agreement counting.
+- `normalize_transcript_words(...)`: Normalizes transcript text into comparable word tokens.
 
 #### `src/audio/wav.py`
 
@@ -549,7 +556,7 @@ macOS still-photo capture.
 Audio capture and segmentation configuration.
 
 - Audio shape: sample rate, channels, sample width, chunk size, and pre-roll.
-- Segmentation: semantic pause duration, hard silence duration, RMS start threshold, active-speech continuation ratio, hangover duration, streaming transcription interval, and transcript agreement count.
+- Segmentation: hard silence duration, RMS start threshold, active-speech continuation ratio, hangover duration, streaming transcription interval, and transcript agreement count.
 
 ### `src/speech/constants.py`
 
