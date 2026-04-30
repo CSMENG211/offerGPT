@@ -37,14 +37,8 @@ class OllamaSemanticEndpointDetector:
         """Return True only when the draft audio is confidently complete."""
         return self.detect(audio_path).is_complete
 
-    def detect(self, audio_path: Path) -> SemanticEndpointResult:
-        """Return the draft transcript and whether it is confidently complete."""
-        transcriber = self._current_transcriber()
-        if transcriber is None:
-            logger.debug("Semantic endpoint check skipped; transcriber is not ready.")
-            return SemanticEndpointResult(is_complete=False)
-
-        transcript = transcriber.transcribe(audio_path, log_progress=False)
+    def classify_transcript(self, transcript: str) -> SemanticEndpointResult:
+        """Return whether a transcript is semantically complete."""
         if not transcript:
             logger.debug("Semantic endpoint check skipped; draft transcript is empty.")
             return SemanticEndpointResult(is_complete=False)
@@ -88,6 +82,16 @@ class OllamaSemanticEndpointDetector:
             transcript=transcript,
             is_rejected=False,
         )
+
+    def detect(self, audio_path: Path) -> SemanticEndpointResult:
+        """Return the draft transcript and whether it is confidently complete."""
+        transcriber = self._current_transcriber()
+        if transcriber is None:
+            logger.debug("Semantic endpoint check skipped; transcriber is not ready.")
+            return SemanticEndpointResult(is_complete=False)
+
+        transcript = transcriber.transcribe(audio_path, log_progress=False)
+        return self.classify_transcript(transcript)
 
     def _current_transcriber(self) -> Transcriber | None:
         with self._lock:

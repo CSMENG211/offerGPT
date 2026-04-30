@@ -7,25 +7,21 @@ from pathlib import Path
 from loguru import logger
 
 from audio import (
-    AudioEnhancementConfig,
     CompletedStreamSegment,
-    enhance_wav,
     is_repetitive_transcript,
     stream_utterance_segments,
     trim_repetitive_transcript_suffix,
 )
 from audio.constants import (
     DEFAULT_SILENCE_THRESHOLD,
-    STREAM_FALLBACK_NEW_WORD_THRESHOLD,
     STREAM_HARD_SILENCE_SECONDS,
     STREAM_SEMANTIC_SILENCE_SECONDS,
+    STREAM_TRANSCRIPT_AGREEMENT_COUNT,
 )
 from gpt import submit_to_chatgpt
 from speech.constants import (
     DEFAULT_ENDPOINT_TRANSCRIPTION_BACKEND,
     DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL,
-    DEFAULT_FINAL_TRANSCRIPTION_BACKEND,
-    DEFAULT_FINAL_TRANSCRIPTION_MODEL,
 )
 from gpt.prompts import build_stream_prompt
 from vision import (
@@ -76,10 +72,21 @@ def stream_loop(options: RuntimeOptions) -> None:
         segment_queue: queue.Queue[CompletedStreamSegment | Exception] = queue.Queue()
         stop_event = threading.Event()
         semantic_endpoint_detector = OllamaSemanticEndpointDetector()
+        use_local_transcription_cache = options.ask_chatgpt
+        stream_transcription_model = model_path_for_run(
+            DEFAULT_ENDPOINT_TRANSCRIPTION_BACKEND,
+            DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL,
+            use_local_cache=use_local_transcription_cache,
+        )
+        stream_transcriber = create_transcriber(
+            DEFAULT_ENDPOINT_TRANSCRIPTION_BACKEND,
+            stream_transcription_model,
+        )
         recorder = start_stream_recorder(
             Path(temp_dir),
             segment_queue,
             stop_event,
+            stream_transcriber,
             semantic_endpoint_detector,
         )
         photo_timer = (
@@ -89,26 +96,6 @@ def stream_loop(options: RuntimeOptions) -> None:
         )
 
         try:
-            use_local_transcription_cache = options.ask_chatgpt
-            endpoint_transcription_model = model_path_for_run(
-                DEFAULT_ENDPOINT_TRANSCRIPTION_BACKEND,
-                DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL,
-                use_local_cache=use_local_transcription_cache,
-            )
-            final_transcription_model = model_path_for_run(
-                DEFAULT_FINAL_TRANSCRIPTION_BACKEND,
-                DEFAULT_FINAL_TRANSCRIPTION_MODEL,
-                use_local_cache=use_local_transcription_cache,
-            )
-            endpoint_transcriber = create_transcriber(
-                DEFAULT_ENDPOINT_TRANSCRIPTION_BACKEND,
-                endpoint_transcription_model,
-            )
-            final_transcriber = create_transcriber(
-                DEFAULT_FINAL_TRANSCRIPTION_BACKEND,
-                final_transcription_model,
-            )
-            semantic_endpoint_detector.set_transcriber(endpoint_transcriber)
             speaker_identifier = SpeakerIdentifier()
             photo_tracker = PhotoUploadTracker()
             while True:
@@ -118,7 +105,6 @@ def stream_loop(options: RuntimeOptions) -> None:
 
                 submitted = process_stream_segment(
                     segment,
-                    final_transcriber,
                     speaker_identifier,
                     options,
                     include_mode_prompt=is_first_submission,
@@ -140,6 +126,7 @@ def start_stream_recorder(
     output_dir: Path,
     segment_queue: queue.Queue[CompletedStreamSegment | Exception],
     stop_event: threading.Event,
+    transcriber: Transcriber,
     semantic_endpoint_detector: OllamaSemanticEndpointDetector,
 ) -> threading.Thread:
     """Start the background recorder that feeds completed segments into a queue."""
@@ -149,11 +136,11 @@ def start_stream_recorder(
             output_dir,
             segment_queue,
             stop_event,
+            transcriber,
             STREAM_HARD_SILENCE_SECONDS,
             DEFAULT_SILENCE_THRESHOLD,
             STREAM_SEMANTIC_SILENCE_SECONDS,
-            semantic_endpoint_detector.detect,
-            STREAM_FALLBACK_NEW_WORD_THRESHOLD,
+            semantic_endpoint_detector.classify_transcript,
         ),
     )
     recorder.start()
@@ -177,7 +164,6 @@ def next_stream_segment(
 
 def process_stream_segment(
     segment: CompletedStreamSegment,
-    transcriber: Transcriber,
     speaker_identifier: SpeakerIdentifier,
     options: RuntimeOptions,
     include_mode_prompt: bool,
@@ -185,17 +171,10 @@ def process_stream_segment(
 ) -> bool:
     """Transcribe one stream segment and optionally submit it for feedback."""
     audio_path = segment.path
-    enhanced_audio_path = audio_path.with_name(f"{audio_path.stem}-enhanced.wav")
     speaker_hint = build_speaker_hint(audio_path, speaker_identifier)
-    transcription_path = enhance_wav(
-        audio_path,
-        enhanced_audio_path,
-        AudioEnhancementConfig(enabled=options.audio_enhancement),
-    )
     try:
-        transcript = transcriber.transcribe(transcription_path)
+        transcript = segment.transcript
     finally:
-        enhanced_audio_path.unlink(missing_ok=True)
         audio_path.unlink(missing_ok=True)
     print_transcript(transcript)
     print_speaker_hint(speaker_hint)
@@ -266,7 +245,7 @@ def print_stream_mode_banner(options: RuntimeOptions) -> None:
     """Print the active stream-mode trigger settings."""
     logger.info("Stream mode is active.")
     logger.info(
-        "Audio segments end after semantic completion or {:g}s silence fallback.",
+        "Audio segments end after semantic completion or {:g}s hard silence.",
         STREAM_HARD_SILENCE_SECONDS,
     )
     logger.debug(
@@ -274,18 +253,13 @@ def print_stream_mode_banner(options: RuntimeOptions) -> None:
         STREAM_SEMANTIC_SILENCE_SECONDS,
     )
     logger.info(
-        "Endpoint transcription: {} {}",
+        "Streaming transcription: {} {}",
         DEFAULT_ENDPOINT_TRANSCRIPTION_BACKEND,
         DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL,
     )
     logger.info(
-        "Final transcription: {} {}",
-        DEFAULT_FINAL_TRANSCRIPTION_BACKEND,
-        DEFAULT_FINAL_TRANSCRIPTION_MODEL,
-    )
-    logger.info(
-        "Audio enhancement: {}",
-        "enabled" if options.audio_enhancement else "disabled",
+        "Transcript stabilization: {} matching drafts before semantic check",
+        STREAM_TRANSCRIPT_AGREEMENT_COUNT,
     )
     if options.photo_mode != "none":
         logger.info(

@@ -1,7 +1,7 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 import queue
 import re
 import threading
@@ -23,17 +23,25 @@ from audio.constants import (
     AUDIO_SAMPLE_RATE,
     DEFAULT_SILENCE_THRESHOLD,
     STREAM_ENDPOINT_DRAFT_SECONDS,
-    STREAM_FALLBACK_NEW_WORD_THRESHOLD,
     STREAM_HARD_SILENCE_SECONDS,
-    STREAM_MAX_FALLBACK_DELAYS,
     STREAM_MAX_SEGMENT_SECONDS,
     STREAM_SEMANTIC_SILENCE_SECONDS,
+    STREAM_TRANSCRIPTION_INTERVAL_SECONDS,
+    STREAM_TRANSCRIPT_AGREEMENT_COUNT,
     STREAM_SPEECH_CONTINUE_THRESHOLD_RATIO,
     STREAM_SPEECH_HANGOVER_SECONDS,
 )
 
-SemanticEndpointDetector = Callable[[Path], "SemanticEndpointResult"]
+SemanticEndpointDetector = Callable[[str], "SemanticEndpointResult"]
 TRANSCRIPT_WORD_PATTERN = re.compile(r"[a-z0-9]+(?:'[a-z0-9]+)?")
+
+
+class StreamingTranscriber(Protocol):
+    """Common interface for the recorder's single streaming ASR path."""
+
+    def transcribe(self, audio_path: Path, *, log_progress: bool = True) -> str:
+        """Transcribe a WAV file and return plain text."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -42,28 +50,46 @@ class CompletedStreamSegment:
 
     path: Path
     completion_reason: str
+    transcript: str = ""
 
 
 @dataclass(frozen=True)
-class SemanticEndpointJob:
-    """Snapshot of an in-progress segment to classify off the recorder thread."""
+class TranscriptionJob:
+    """Snapshot of an in-progress segment to transcribe off the recorder thread."""
 
     segment_index: int
     pause_index: int
     chunks: list[bytes]
-    purpose: str = "semantic"
+
+
+@dataclass(frozen=True)
+class TranscriptionResult:
+    """Transcript result for one queued draft segment snapshot."""
+
+    transcript: str = ""
+    is_rejected: bool = False
+    segment_index: int = -1
+    pause_index: int = -1
+
+
+@dataclass(frozen=True)
+class SemanticEndpointJob:
+    """Stabilized transcript submitted for semantic completion classification."""
+
+    segment_index: int
+    pause_index: int
+    transcript: str
 
 
 @dataclass(frozen=True)
 class SemanticEndpointResult:
-    """Semantic completion result for one queued draft segment snapshot."""
+    """Semantic completion result for one stabilized transcript."""
 
     is_complete: bool
     transcript: str = ""
     is_rejected: bool = False
     segment_index: int = -1
     pause_index: int = -1
-    purpose: str = "semantic"
 
 
 @dataclass(frozen=True)
@@ -128,26 +154,30 @@ class StreamSegmenter:
         output_dir: Path,
         segment_queue: queue.Queue[CompletedStreamSegment | Exception],
         stop_event: threading.Event,
+        transcriber: StreamingTranscriber,
         hard_silence_seconds: float = STREAM_HARD_SILENCE_SECONDS,
         silence_threshold: int = DEFAULT_SILENCE_THRESHOLD,
         semantic_silence_seconds: float = STREAM_SEMANTIC_SILENCE_SECONDS,
         semantic_endpoint_detector: SemanticEndpointDetector | None = None,
-        fallback_new_word_threshold: int = STREAM_FALLBACK_NEW_WORD_THRESHOLD,
-        max_fallback_delays: int = STREAM_MAX_FALLBACK_DELAYS,
         max_segment_seconds: float = STREAM_MAX_SEGMENT_SECONDS,
         endpoint_draft_seconds: float = STREAM_ENDPOINT_DRAFT_SECONDS,
+        transcription_interval_seconds: float = STREAM_TRANSCRIPTION_INTERVAL_SECONDS,
+        transcript_agreement_count: int = STREAM_TRANSCRIPT_AGREEMENT_COUNT,
     ) -> None:
         self.output_dir = output_dir
         self.segment_queue = segment_queue
         self.stop_event = stop_event
+        self.transcriber = transcriber
         self.hard_silence_seconds = hard_silence_seconds
         self.silence_threshold = silence_threshold
         self.semantic_silence_seconds = semantic_silence_seconds
         self.semantic_endpoint_detector = semantic_endpoint_detector
-        self.fallback_new_word_threshold = fallback_new_word_threshold
-        self.max_fallback_delays = max_fallback_delays
         self.max_segment_seconds = max_segment_seconds
         self.endpoint_draft_blocks = block_count_for_seconds(endpoint_draft_seconds)
+        self.transcription_interval_blocks = block_count_for_seconds(
+            transcription_interval_seconds
+        )
+        self.transcript_agreement_count = max(1, transcript_agreement_count)
         self.speech_detector = StreamSpeechDetector(silence_threshold)
 
         self.blocksize = audio_blocksize()
@@ -160,22 +190,27 @@ class StreamSegmenter:
         self.segment_chunks = 0
         self.silent_blocks = 0
         self.semantic_check_queued_this_pause = False
-        self.fallback_check_queued_this_pause = False
         self.semantic_pause_index = 0
-        self.fallback_delay_count = 0
+        self.last_transcription_job_chunks = 0
+        self.last_seen_transcript_key = ""
+        self.latest_transcript = ""
+        self.transcript_agreements = 0
         self.recording_started = False
         self.segment_index = 0
         self.wav_file: wave.Wave_write | None = None
         self.segment_path: Path | None = None
         self.pending_completion_reason = "shutdown"
-        self.latest_semantic_transcript = ""
 
+        self.transcription_job_queue: queue.Queue[TranscriptionJob | None] | None = None
+        self.transcription_result_queue: queue.Queue[TranscriptionResult] | None = None
+        self.transcription_worker: threading.Thread | None = None
         self.semantic_job_queue: queue.Queue[SemanticEndpointJob | None] | None = None
         self.semantic_result_queue: queue.Queue[SemanticEndpointResult] | None = None
         self.semantic_worker: threading.Thread | None = None
 
     def run(self) -> None:
         """Run the recorder loop until stopped, queueing completed segments."""
+        self.start_transcription_worker()
         self.start_semantic_worker()
         logger.info("Audio stream active. Waiting for audio input...")
         try:
@@ -185,7 +220,30 @@ class StreamSegmenter:
                 self.segment_queue.put(error)
         finally:
             self.finish_active_segment()
+            self.stop_transcription_worker()
             self.stop_semantic_worker()
+
+    def start_transcription_worker(self) -> None:
+        """Start the single streaming ASR worker."""
+        self.transcription_job_queue = queue.Queue()
+        self.transcription_result_queue = queue.Queue()
+        self.transcription_worker = threading.Thread(
+            target=run_transcription_worker,
+            args=(
+                self.output_dir,
+                self.transcription_job_queue,
+                self.transcription_result_queue,
+                self.transcriber,
+            ),
+        )
+        self.transcription_worker.start()
+
+    def stop_transcription_worker(self) -> None:
+        """Stop the streaming ASR worker if it was started."""
+        if self.transcription_job_queue is not None:
+            self.transcription_job_queue.put(None)
+        if self.transcription_worker is not None:
+            self.transcription_worker.join()
 
     def start_semantic_worker(self) -> None:
         """Start the semantic endpoint worker when a detector is configured."""
@@ -197,7 +255,6 @@ class StreamSegmenter:
         self.semantic_worker = threading.Thread(
             target=run_semantic_endpoint_worker,
             args=(
-                self.output_dir,
                 self.semantic_job_queue,
                 self.semantic_result_queue,
                 self.semantic_endpoint_detector,
@@ -241,15 +298,16 @@ class StreamSegmenter:
         self.write_segment_chunks([chunk])
         self.update_silence_state(is_speech)
 
+        if self.handle_transcription_results():
+            return
         if self.handle_semantic_endpoint_results():
             return
 
-        if self.should_queue_semantic_check():
-            self.semantic_check_queued_this_pause = True
-            self.queue_semantic_endpoint_check()
+        if self.should_queue_transcription_check():
+            self.queue_transcription_check()
 
         if self.silent_blocks >= self.hard_silence_blocks_needed:
-            self.handle_hard_silence_fallback()
+            self.accept_hard_silence()
 
     def start_segment(self) -> None:
         """Start writing a new stream segment."""
@@ -262,7 +320,10 @@ class StreamSegmenter:
         self.segment_chunks = len(self.pre_roll)
         self.silent_blocks = 0
         self.semantic_check_queued_this_pause = False
-        self.fallback_check_queued_this_pause = False
+        self.last_transcription_job_chunks = 0
+        self.last_seen_transcript_key = ""
+        self.latest_transcript = ""
+        self.transcript_agreements = 0
         self.speech_detector.mark_speech()
 
     def finish_active_segment(self) -> None:
@@ -276,8 +337,10 @@ class StreamSegmenter:
         self.recording_started = False
         self.silent_blocks = 0
         self.semantic_check_queued_this_pause = False
-        self.fallback_check_queued_this_pause = False
-        self.fallback_delay_count = 0
+        self.last_transcription_job_chunks = 0
+        self.last_seen_transcript_key = ""
+        self.latest_transcript = ""
+        self.transcript_agreements = 0
         self.pre_roll.clear()
         self.speech_detector.reset()
         logger.info("Waiting for audio input...")
@@ -292,6 +355,7 @@ class StreamSegmenter:
             CompletedStreamSegment(
                 path=self.segment_path,
                 completion_reason=self.pending_completion_reason,
+                transcript=self.latest_transcript,
             )
         )
         self.wav_file = None
@@ -299,8 +363,7 @@ class StreamSegmenter:
         self.recorded_chunks = []
         self.segment_chunks = 0
         self.pending_completion_reason = "shutdown"
-        self.latest_semantic_transcript = ""
-        self.fallback_delay_count = 0
+        self.latest_transcript = ""
 
     def write_segment_chunks(self, chunks: Iterable[bytes]) -> None:
         """Write raw chunks into the current segment and snapshot buffer."""
@@ -327,95 +390,49 @@ class StreamSegmenter:
                 self.semantic_pause_index += 1
             self.silent_blocks = 0
             self.semantic_check_queued_this_pause = False
-            self.fallback_check_queued_this_pause = False
         else:
             self.silent_blocks += 1
 
-    def should_queue_semantic_check(self) -> bool:
-        """Return whether the current silence pause needs a semantic check."""
+    def should_queue_transcription_check(self) -> bool:
+        """Return whether enough new audio has arrived for another ASR snapshot."""
         return (
-            not self.semantic_check_queued_this_pause
-            and self.silent_blocks >= self.semantic_silence_blocks_needed
+            self.transcription_job_queue is not None
+            and self.segment_path is not None
+            and not self.transcription_worker_has_pending_jobs()
+            and self.segment_chunks - self.last_transcription_job_chunks
+            >= self.transcription_interval_blocks
         )
 
-    def handle_hard_silence_fallback(self) -> None:
-        """Queue a fallback guard check without blocking microphone capture."""
-        silence_seconds = self.current_silence_seconds()
-        segment_seconds = self.current_segment_seconds()
-
-        if self.fallback_check_queued_this_pause:
-            logger.debug("Audio segment fallback check already queued for this pause.")
+    def queue_transcription_check(self) -> None:
+        """Queue one single-path ASR job for the current segment snapshot."""
+        if self.transcription_job_queue is None:
             return
 
-        if not self.queue_fallback_endpoint_check():
-            logger.info(
-                "Audio segment fallback accepted: no endpoint guard available after "
-                "{:.1f}s silence.",
-                silence_seconds,
+        self.transcription_job_queue.put(
+            TranscriptionJob(
+                segment_index=self.segment_index,
+                pause_index=self.semantic_pause_index,
+                chunks=list(self.recorded_chunks),
             )
-            self.pending_completion_reason = f"{silence_seconds:.1f}s silence fallback"
-            self.finish_segment_and_reset()
-            return
-
-        self.fallback_check_queued_this_pause = True
-        logger.info(
-            "Audio segment fallback check queued after {:.1f}s silence since last "
-            "speech chunk; segment duration {:.1f}s.",
-            silence_seconds,
-            segment_seconds,
         )
+        self.last_transcription_job_chunks = self.segment_chunks
 
-    def handle_fallback_endpoint_result(self, result: SemanticEndpointResult) -> bool:
-        """Apply a non-blocking hard-fallback guard result."""
-        new_words = self.fallback_result_new_words(result)
-        if len(new_words) >= self.fallback_new_word_threshold:
-            if self.should_accept_fallback_despite_new_words():
-                return self.accept_fallback_after_guard_cap(new_words)
-
-            self.fallback_delay_count += 1
-            logger.info(
-                "Audio segment fallback delayed: endpoint transcript gained {} new "
-                "words; delay {}/{}.",
-                len(new_words),
-                self.fallback_delay_count,
-                self.max_fallback_delays,
-            )
-            logger.debug("Fallback new-word suffix: {}", " ".join(new_words))
-            self.semantic_pause_index += 1
-            self.silent_blocks = 0
-            self.semantic_check_queued_this_pause = False
-            self.fallback_check_queued_this_pause = False
-            self.speech_detector.mark_speech()
-            return False
-
-        return self.accept_fallback("no meaningful new words")
-
-    def should_accept_fallback_despite_new_words(self) -> bool:
-        """Return whether fallback guard delays have reached a safety cap."""
+    def transcription_worker_has_pending_jobs(self) -> bool:
+        """Return whether the ASR worker queue already has pending work."""
         return (
-            self.fallback_delay_count >= self.max_fallback_delays
-            or self.current_segment_seconds() >= self.max_segment_seconds
+            self.transcription_job_queue is not None
+            and not self.transcription_job_queue.empty()
         )
 
-    def accept_fallback_after_guard_cap(self, new_words: list[str]) -> bool:
-        """Accept fallback even with ASR growth when safety caps are reached."""
-        segment_seconds = self.current_segment_seconds()
-        logger.info(
-            "Audio segment fallback accepted after guard cap: endpoint transcript "
-            "gained {} new words, delay count {}/{}, segment duration {:.1f}s.",
-            len(new_words),
-            self.fallback_delay_count,
-            self.max_fallback_delays,
-            segment_seconds,
-        )
-        logger.debug("Fallback new-word suffix at guard cap: {}", " ".join(new_words))
-        return self.accept_fallback("guard cap")
+    def semantic_worker_has_pending_jobs(self) -> bool:
+        """Return whether the semantic worker queue already has pending work."""
+        return self.semantic_job_queue is not None and not self.semantic_job_queue.empty()
 
     def accept_fallback(self, reason: str) -> bool:
-        """Accept the current hard fallback and queue the segment."""
+        """Accept the current stabilized transcript and queue the segment."""
         silence_seconds = self.current_silence_seconds()
         logger.info(
-            "Audio segment fallback accepted: {} after {:.1f}s silence.",
+            "Audio segment trigger: {} after {:.1f}s silence.",
             reason,
             silence_seconds,
         )
@@ -423,93 +440,103 @@ class StreamSegmenter:
         self.finish_segment_and_reset()
         return True
 
-    def fallback_result_new_words(self, result: SemanticEndpointResult) -> list[str]:
-        """Return meaningful ASR tokens added in a fallback guard result."""
+    def accept_hard_silence(self) -> None:
+        """Force the segment to end once hard silence is reached."""
+        silence_seconds = self.current_silence_seconds()
+        logger.info(
+            "Audio segment trigger: hard silence after {:.1f}s.",
+            silence_seconds,
+        )
+        self.pending_completion_reason = f"{silence_seconds:.1f}s hard silence"
+        self.finish_segment_and_reset()
+
+    def handle_transcription_results(self) -> bool:
+        """Apply streaming ASR results without blocking capture."""
+        if self.transcription_result_queue is None:
+            return False
+
+        while True:
+            try:
+                result = self.transcription_result_queue.get_nowait()
+            except queue.Empty:
+                return False
+
+            if not self.recording_started:
+                continue
+            if self.semantic_result_is_stale(result):
+                continue
+
+            transcript = self.cleaned_transcript(result)
+            if transcript:
+                self.latest_transcript = transcript
+                self.update_transcript_agreement(transcript)
+            else:
+                self.update_transcript_agreement("")
+
+            if self.should_queue_semantic_check():
+                self.queue_semantic_endpoint_check()
+        return False
+
+    def cleaned_transcript(self, result: TranscriptionResult) -> str:
+        """Return a cleaned transcript for agreement tracking and final output."""
         if result.is_rejected:
-            logger.debug(
-                "Fallback endpoint transcript ignored as rejected: {}",
-                result.transcript,
-            )
-            return []
+            return ""
 
         transcript = trim_repetitive_transcript_suffix(result.transcript)
         if not transcript:
-            logger.debug(
-                "Fallback endpoint transcript ignored as repetitive: {}",
-                result.transcript,
-            )
-            return []
+            return ""
         if transcript != result.transcript:
             logger.debug(
-                "Fallback endpoint transcript trimmed from {!r} to {!r}.",
+                "Streaming transcript trimmed from {!r} to {!r}.",
                 result.transcript,
                 transcript,
             )
+        return transcript
 
-        previous_transcript = self.latest_semantic_transcript
-        self.latest_semantic_transcript = transcript
-        return new_transcript_words(previous_transcript, transcript)
+    def update_transcript_agreement(self, transcript: str) -> None:
+        """Update transcript agreement state using a normalized transcript key."""
+        transcript_key = self.normalized_transcript_key(transcript)
+        if transcript_key and transcript_key == self.last_seen_transcript_key:
+            self.transcript_agreements += 1
+        elif transcript_key:
+            self.last_seen_transcript_key = transcript_key
+            self.transcript_agreements = 1
+        else:
+            self.transcript_agreements = 0
+
+    def normalized_transcript_key(self, transcript: str) -> str:
+        """Return a normalized transcript key for agreement comparison."""
+        words = [match.group(0) for match in TRANSCRIPT_WORD_PATTERN.finditer(transcript.lower())]
+        return " ".join(words)
+
+    def should_queue_semantic_check(self) -> bool:
+        """Return whether a stabilized transcript is ready for semantic classification."""
+        return (
+            not self.semantic_check_queued_this_pause
+            and self.silent_blocks >= self.semantic_silence_blocks_needed
+            and self.transcript_agreements >= self.transcript_agreement_count
+            and bool(self.latest_transcript)
+            and not self.semantic_worker_has_pending_jobs()
+        )
 
     def queue_semantic_endpoint_check(self) -> None:
-        """Queue one semantic endpoint job for the current segment snapshot."""
-        if (
-            self.semantic_job_queue is None
-            or self.segment_path is None
-            or not self.recorded_chunks
-        ):
+        """Queue semantic classification for the stabilized transcript text."""
+        if self.semantic_job_queue is None:
             return
-
-        if self.endpoint_worker_has_pending_jobs():
-            logger.debug("Semantic endpoint check skipped; endpoint worker is busy.")
-            return
-
+        self.semantic_check_queued_this_pause = True
         self.semantic_job_queue.put(
             SemanticEndpointJob(
                 segment_index=self.segment_index,
                 pause_index=self.semantic_pause_index,
-                chunks=self.endpoint_draft_chunks(),
-                purpose="semantic",
+                transcript=self.latest_transcript,
             )
         )
         logger.info(
-            "Semantic endpoint check queued after {:g}s pause.",
+            "Semantic endpoint check queued after {:g}s pause with {}/{} transcript agreements.",
             self.semantic_silence_seconds,
+            self.transcript_agreements,
+            self.transcript_agreement_count,
         )
-
-    def queue_fallback_endpoint_check(self) -> bool:
-        """Queue a hard-fallback guard job for the current segment snapshot."""
-        if (
-            self.semantic_job_queue is None
-            or self.segment_path is None
-            or not self.recorded_chunks
-        ):
-            return False
-
-        if self.endpoint_worker_has_pending_jobs():
-            logger.info(
-                "Audio segment fallback accepted: endpoint worker busy after "
-                "{:.1f}s silence.",
-                self.current_silence_seconds(),
-            )
-            return False
-
-        self.semantic_job_queue.put(
-            SemanticEndpointJob(
-                segment_index=self.segment_index,
-                pause_index=self.semantic_pause_index,
-                chunks=self.endpoint_draft_chunks(),
-                purpose="fallback",
-            )
-        )
-        return True
-
-    def endpoint_draft_chunks(self) -> list[bytes]:
-        """Return the bounded tail of recorded chunks used for draft ASR."""
-        return list(self.recorded_chunks[-self.endpoint_draft_blocks :])
-
-    def endpoint_worker_has_pending_jobs(self) -> bool:
-        """Return whether the endpoint worker queue already has draft work pending."""
-        return self.semantic_job_queue is not None and not self.semantic_job_queue.empty()
 
     def handle_semantic_endpoint_results(self) -> bool:
         """Apply current semantic endpoint results without blocking capture."""
@@ -532,33 +559,12 @@ class StreamSegmenter:
                 )
                 continue
 
-            if result.purpose == "fallback":
-                if self.handle_fallback_endpoint_result(result):
-                    return True
-                continue
-
             if result.is_rejected:
                 logger.debug(
                     "Semantic endpoint transcript ignored as rejected: {}",
                     result.transcript,
                 )
                 continue
-
-            transcript = trim_repetitive_transcript_suffix(result.transcript)
-            if not transcript:
-                logger.debug(
-                    "Semantic endpoint transcript ignored as repetitive: {}",
-                    result.transcript,
-                )
-                continue
-            if transcript != result.transcript:
-                logger.debug(
-                    "Semantic endpoint transcript trimmed from {!r} to {!r}.",
-                    result.transcript,
-                    transcript,
-                )
-
-            self.latest_semantic_transcript = transcript
 
             if not result.is_complete:
                 logger.debug("Semantic endpoint check: incomplete; waiting for more speech.")
@@ -586,33 +592,73 @@ def stream_utterance_segments(
     output_dir: Path,
     segment_queue: queue.Queue[CompletedStreamSegment | Exception],
     stop_event: threading.Event,
+    transcriber: StreamingTranscriber,
     hard_silence_seconds: float = STREAM_HARD_SILENCE_SECONDS,
     silence_threshold: int = DEFAULT_SILENCE_THRESHOLD,
     semantic_silence_seconds: float = STREAM_SEMANTIC_SILENCE_SECONDS,
     semantic_endpoint_detector: SemanticEndpointDetector | None = None,
-    fallback_new_word_threshold: int = STREAM_FALLBACK_NEW_WORD_THRESHOLD,
-    max_fallback_delays: int = STREAM_MAX_FALLBACK_DELAYS,
     max_segment_seconds: float = STREAM_MAX_SEGMENT_SECONDS,
     endpoint_draft_seconds: float = STREAM_ENDPOINT_DRAFT_SECONDS,
+    transcription_interval_seconds: float = STREAM_TRANSCRIPTION_INTERVAL_SECONDS,
+    transcript_agreement_count: int = STREAM_TRANSCRIPT_AGREEMENT_COUNT,
 ) -> None:
     """Continuously record voice-triggered utterance segments to WAV files."""
     StreamSegmenter(
         output_dir=output_dir,
         segment_queue=segment_queue,
         stop_event=stop_event,
+        transcriber=transcriber,
         hard_silence_seconds=hard_silence_seconds,
         silence_threshold=silence_threshold,
         semantic_silence_seconds=semantic_silence_seconds,
         semantic_endpoint_detector=semantic_endpoint_detector,
-        fallback_new_word_threshold=fallback_new_word_threshold,
-        max_fallback_delays=max_fallback_delays,
         max_segment_seconds=max_segment_seconds,
         endpoint_draft_seconds=endpoint_draft_seconds,
+        transcription_interval_seconds=transcription_interval_seconds,
+        transcript_agreement_count=transcript_agreement_count,
     ).run()
 
 
-def run_semantic_endpoint_worker(
+def run_transcription_worker(
     output_dir: Path,
+    job_queue: queue.Queue[TranscriptionJob | None],
+    result_queue: queue.Queue[TranscriptionResult],
+    transcriber: StreamingTranscriber,
+) -> None:
+    """Run single-path streaming ASR on queued segment snapshots."""
+    while True:
+        job = job_queue.get()
+        if job is None:
+            return
+
+        draft_path = output_dir / (
+            f"stream-segment-{job.segment_index:04d}"
+            f"-transcription-check-{job.pause_index:04d}.wav"
+        )
+        try:
+            write_wav_file(draft_path, job.chunks)
+            transcript = transcriber.transcribe(draft_path, log_progress=False)
+            result = TranscriptionResult(
+                transcript=transcript,
+                is_rejected=False,
+                segment_index=job.segment_index,
+                pause_index=job.pause_index,
+            )
+        except Exception as error:
+            logger.warning("Streaming transcription check failed: {}", error)
+            result = TranscriptionResult(
+                transcript="",
+                is_rejected=True,
+                segment_index=job.segment_index,
+                pause_index=job.pause_index,
+            )
+        finally:
+            draft_path.unlink(missing_ok=True)
+
+        result_queue.put(result)
+
+
+def run_semantic_endpoint_worker(
     job_queue: queue.Queue[SemanticEndpointJob | None],
     result_queue: queue.Queue[SemanticEndpointResult],
     semantic_endpoint_detector: SemanticEndpointDetector,
@@ -623,23 +669,15 @@ def run_semantic_endpoint_worker(
         if job is None:
             return
 
-        draft_path = output_dir / (
-            f"stream-segment-{job.segment_index:04d}"
-            f"-{job.purpose}-check-{job.pause_index:04d}.wav"
-        )
         try:
-            write_wav_file(draft_path, job.chunks)
-            endpoint_result = semantic_endpoint_detector(draft_path)
+            endpoint_result = semantic_endpoint_detector(job.transcript)
         except Exception as error:
             logger.warning("Semantic endpoint check failed: {}", error)
             endpoint_result = SemanticEndpointResult(
                 is_complete=False,
                 segment_index=job.segment_index,
                 pause_index=job.pause_index,
-                purpose=job.purpose,
             )
-        finally:
-            draft_path.unlink(missing_ok=True)
 
         result_queue.put(
             SemanticEndpointResult(
@@ -648,7 +686,6 @@ def run_semantic_endpoint_worker(
                 is_rejected=endpoint_result.is_rejected,
                 segment_index=job.segment_index,
                 pause_index=job.pause_index,
-                purpose=job.purpose,
             )
         )
 

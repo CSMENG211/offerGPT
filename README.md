@@ -6,14 +6,13 @@ It captures audio from your microphone, transcribes it locally with
 mlx-whisper, and sends each transcript segment to ChatGPT for role
 classification, context tracking, and answer feedback.
 
-By default, SecondVoice preprocesses each captured WAV with an in-app
-spectral-gate noise reducer before transcription. This helps reduce background
-sounds such as keyboard taps without changing the raw audio used for voice
-matching.
+SecondVoice now uses a single streaming transcription path during live capture.
+Instead of one fast draft transcription plus a second slower final
+transcription, it continuously builds transcript drafts with the live ASR model,
+waits for repeated draft agreement, and then runs semantic completion on the
+stabilized transcript text.
 
-Stream endpoint checks stay lightweight: draft transcription uses the tiny MLX
-Whisper model and only the most recent 12 seconds of the active segment. Final
-segment transcription still uses the larger final model and the enhanced audio.
+The raw WAV is still preserved long enough for speaker matching and cleanup.
 
 ### Install
 

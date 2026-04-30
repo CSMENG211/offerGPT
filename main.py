@@ -51,8 +51,8 @@ def parse_args() -> RuntimeOptions:
         dest="audio_enhancement",
         default=True,
         help=(
-            "Disable audio preprocessing before final transcription. "
-            "Audio enhancement is enabled by default."
+            "Retained for compatibility. The live streaming path no longer uses "
+            "a separate enhancement pass."
         ),
     )
     args = parser.parse_args()
