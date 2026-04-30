@@ -109,16 +109,6 @@ Command:
 
 This script opens the automation Chrome profile on macOS only when the CDP endpoint is not already running, builds a stream prompt from a fixed two-sum-style transcript, and submits it to ChatGPT. It bypasses microphone recording, local transcription, and interactive transcript entry, so it is useful for manual browser automation, fixed photo upload, and scroll-behavior checks. It does not assert scroll position automatically, and it does not accept a photo mode; it always attaches `/Users/flora/interview/static.jpg`.
 
-### 6. Standalone Camera Capture
-
-Command:
-
-```sh
-.venv/bin/python src/vision/camera.py
-```
-
-This captures one image with `imagesnap` from the named macOS camera and writes it to the live photo path. The default camera is `"FaceTime HD Camera"`.
-
 ## Main Data Flow
 
 ```text
@@ -536,8 +526,6 @@ macOS still-photo capture.
 
 - `CameraCaptureError`: Raised when photo capture fails.
 - `take_photo(output_path, camera_name)`: Uses `imagesnap` to capture one photo to a target path.
-- `parse_args()`: Defines standalone camera CLI flags.
-- `main()`: Captures one photo and prints the saved path.
 
 #### `src/vision/constants.py`
 

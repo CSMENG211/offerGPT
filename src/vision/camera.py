@@ -1,20 +1,11 @@
 #!/usr/bin/env python3
-"""Capture a still photo from the built-in macOS camera.
+"""Capture a still photo from the built-in macOS camera."""
 
-This module can be imported and used from other code, or run directly:
-
-    python src/vision/camera.py
-"""
-
-import argparse
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from vision.constants import DEFAULT_CAMERA_NAME, LIVE_INTERVIEW_PHOTO_PATH  # noqa: E402
+from vision.constants import DEFAULT_CAMERA_NAME, LIVE_INTERVIEW_PHOTO_PATH
 
 
 class CameraCaptureError(RuntimeError):
@@ -64,33 +55,3 @@ def take_photo(
         raise CameraCaptureError(f"imagesnap did not create a photo at {path}.")
 
     return path
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Take one photo from the built-in macOS camera and save it to "
-            f"{LIVE_INTERVIEW_PHOTO_PATH}."
-        )
-    )
-    parser.add_argument(
-        "--camera-name",
-        default=DEFAULT_CAMERA_NAME,
-        help=f"Camera device name. Default: {DEFAULT_CAMERA_NAME!r}",
-    )
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    try:
-        path = take_photo(camera_name=args.camera_name)
-    except CameraCaptureError as exc:
-        print(exc, file=sys.stderr)
-        raise SystemExit(1) from exc
-
-    print(f"Saved photo to {path}")
-
-
-if __name__ == "__main__":
-    main()
