@@ -59,17 +59,6 @@ def repetitive_window_start_offset(words: list[str], min_tokens: int = 20) -> in
     return None
 
 
-def trim_repetitive_transcript_suffix(transcript: str) -> str:
-    """Remove a trailing ASR repetition loop while preserving the meaningful prefix."""
-    tokens = normalized_transcript_tokens(transcript)
-    suffix_start = repetitive_suffix_start([token.text for token in tokens])
-    if suffix_start is None:
-        return transcript
-    if suffix_start == 0:
-        return ""
-    return transcript[: tokens[suffix_start].start].rstrip(" ,.;:-")
-
-
 def repetitive_suffix_start(
     words: list[str],
     min_window_tokens: int = 12,
@@ -116,4 +105,3 @@ def dominant_ngram_start(
         return None
 
     return first_indexes[dominant_ngram]
-

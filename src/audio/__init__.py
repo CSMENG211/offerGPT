@@ -22,7 +22,6 @@ from audio.stream_types import (
 from audio.stream_workers import run_semantic_endpoint_worker, run_transcription_worker
 from audio.transcript_utils import (
     is_repetitive_transcript,
-    trim_repetitive_transcript_suffix,
 )
 from audio.wav import open_wav_writer, write_chunks, write_wav_file
 
@@ -46,7 +45,6 @@ __all__ = [
     "run_transcription_worker",
     "run_semantic_endpoint_worker",
     "stream_utterance_segments",
-    "trim_repetitive_transcript_suffix",
     "write_chunks",
     "write_wav_file",
 ]

@@ -5,7 +5,7 @@ from urllib.request import Request, urlopen
 
 from loguru import logger
 
-from audio import SemanticEndpointResult, trim_repetitive_transcript_suffix
+from audio import SemanticEndpointResult
 from speech.constants import (
     DEFAULT_ENDPOINT_MODEL,
     ENDPOINT_LABEL_COMPLETE,
@@ -28,25 +28,6 @@ class OllamaSemanticEndpointDetector:
         if not transcript:
             logger.debug("Semantic endpoint check skipped; draft transcript is empty.")
             return SemanticEndpointResult(is_complete=False)
-
-        trimmed_transcript = trim_repetitive_transcript_suffix(transcript)
-        if not trimmed_transcript:
-            logger.debug(
-                "Semantic endpoint transcript ignored as repetitive: {}",
-                transcript,
-            )
-            return SemanticEndpointResult(
-                is_complete=False,
-                transcript=transcript,
-                is_rejected=True,
-            )
-        if trimmed_transcript != transcript:
-            logger.debug(
-                "Semantic endpoint transcript trimmed from {!r} to {!r}.",
-                transcript,
-                trimmed_transcript,
-            )
-            transcript = trimmed_transcript
 
         try:
             label, duration_ms = classify_endpoint_transcript(transcript, self.model)

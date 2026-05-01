@@ -10,7 +10,6 @@ from audio import (
     CompletedStreamSegment,
     is_repetitive_transcript,
     stream_utterance_segments,
-    trim_repetitive_transcript_suffix,
 )
 from audio.constants import (
     DEFAULT_SILENCE_THRESHOLD,
@@ -179,20 +178,6 @@ def process_stream_segment(
         logger.info("No speech detected. Listening again.")
         return False
 
-    trimmed_transcript = trim_repetitive_transcript_suffix(transcript)
-    if trimmed_transcript != transcript:
-        logger.info("Trimmed repetitive transcript suffix before submission.")
-        logger.debug(
-            "Final transcript trimmed from {!r} to {!r}.",
-            transcript,
-            trimmed_transcript,
-        )
-        transcript = trimmed_transcript
-
-    if not transcript:
-        logger.info("Skipping transcript because it appears repetitive or garbled.")
-        return False
-
     if is_repetitive_transcript(transcript):
         logger.info("Skipping transcript because it appears repetitive or garbled.")
         return False
@@ -275,7 +260,12 @@ def print_stream_mode_banner(options: RuntimeOptions) -> None:
 def stream_transcription_label() -> str:
     """Return a compact transcription backend+model label for logs."""
     model = DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL.lower()
-    size = "tiny" if "tiny" in model else DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL
+    if "small" in model:
+        size = "small"
+    elif "tiny" in model:
+        size = "tiny"
+    else:
+        size = DEFAULT_ENDPOINT_TRANSCRIPTION_MODEL
     return f"{DEFAULT_ENDPOINT_TRANSCRIPTION_BACKEND} {size}"
 
 

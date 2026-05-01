@@ -25,7 +25,6 @@ from audio.stream_types import (
 from audio.stream_workers import run_semantic_endpoint_worker, run_transcription_worker
 from audio.transcript_utils import (
     TRANSCRIPT_WORD_PATTERN,
-    trim_repetitive_transcript_suffix,
 )
 from audio.wav import open_wav_writer
 from audio.constants import (
@@ -415,17 +414,7 @@ class StreamSegmenter:
         """Return a cleaned transcript for agreement tracking and final output."""
         if result.is_rejected:
             return ""
-
-        transcript = trim_repetitive_transcript_suffix(result.transcript)
-        if not transcript:
-            return ""
-        if transcript != result.transcript:
-            logger.debug(
-                "Streaming transcript trimmed from {!r} to {!r}.",
-                result.transcript,
-                transcript,
-            )
-        return transcript
+        return result.transcript
 
     def update_transcript_agreement(self, transcript: str) -> None:
         """Update transcript agreement state using a normalized transcript key."""
