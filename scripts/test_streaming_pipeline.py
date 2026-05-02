@@ -18,27 +18,11 @@ from audio import (
 )
 from audio.levels import audio_blocksize
 from audio.wav import write_wav_file
-from speech import SpeakerHint
 
 
 def silent_chunk() -> bytes:
     """Return one block of silence matching the app audio chunk size."""
     return b"\0" * audio_blocksize() * 2
-
-
-class RecordingSpeakerIdentifier:
-    def __init__(self) -> None:
-        self.path: Path | None = None
-
-    def match(self, audio_path: Path) -> SpeakerHint:
-        self.path = audio_path
-        assert audio_path.exists()
-        return SpeakerHint(
-            role_hint="unknown",
-            confidence=None,
-            similarity=None,
-            profile_available=False,
-        )
 
 
 class RecordingTranscriber:
@@ -55,19 +39,16 @@ def test_process_stream_segment_uses_streamed_transcript_and_raw_audio() -> None
     with tempfile.TemporaryDirectory() as temp_dir:
         raw_path = Path(temp_dir) / "stream-segment-0001.wav"
         write_wav_file(raw_path, [silent_chunk()])
-        speaker_identifier = RecordingSpeakerIdentifier()
         options = app.RuntimeOptions(ask_chatgpt=False)
 
         submitted = app.process_stream_segment(
             CompletedStreamSegment(raw_path, "test", transcript="hello world"),
-            speaker_identifier,
             options,
             include_mode_prompt=True,
             photo_tracker=app.PhotoUploadTracker(),
         )
 
         assert not submitted
-        assert speaker_identifier.path == raw_path
         assert not raw_path.exists()
 
 

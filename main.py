@@ -36,11 +36,6 @@ def parse_args() -> RuntimeOptions:
         help="Transcribe without submitting the prompt to ChatGPT.",
     )
     parser.add_argument(
-        "--enroll",
-        action="store_true",
-        help="Record prompted interviewee voice samples and save the voice profile.",
-    )
-    parser.add_argument(
         "--photo-mode",
         choices=("none", "test", "live"),
         default="none",
@@ -54,7 +49,6 @@ def parse_args() -> RuntimeOptions:
     args = parser.parse_args()
     return RuntimeOptions(
         ask_chatgpt=args.ask_chatgpt,
-        enroll_me=args.enroll,
         photo_mode=args.photo_mode,
     )
 

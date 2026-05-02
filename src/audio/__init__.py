@@ -1,4 +1,3 @@
-from audio.enrollment import capture_enrollment_utterance
 from audio.levels import (
     audio_blocksize,
     block_count_for_seconds,
@@ -36,7 +35,6 @@ __all__ = [
     "StreamSegmenter",
     "audio_blocksize",
     "block_count_for_seconds",
-    "capture_enrollment_utterance",
     "chunk_is_speech",
     "create_pre_roll_buffer",
     "open_wav_writer",

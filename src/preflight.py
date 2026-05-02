@@ -13,14 +13,10 @@ class PreflightOptions(Protocol):
     """Runtime options required by dependency checks."""
 
     ask_chatgpt: bool
-    enroll_me: bool
 
 
 def check_runtime_dependencies(options: PreflightOptions) -> None:
     """Abort early when required local services are not ready."""
-    if options.enroll_me:
-        return
-
     checks_passed = True
 
     if not ollama_model_is_ready():

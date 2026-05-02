@@ -32,11 +32,8 @@ from vision import (
 )
 from speech import (
     OllamaSemanticEndpointDetector,
-    SpeakerHint,
-    SpeakerIdentifier,
     Transcriber,
     create_transcriber,
-    enroll_interviewee_voice,
     model_path_for_run,
 )
 
@@ -46,16 +43,11 @@ class RuntimeOptions:
     """Options selected by the command-line interface."""
 
     ask_chatgpt: bool = True
-    enroll_me: bool = False
     photo_mode: PhotoMode = "none"
 
 
 def run(options: RuntimeOptions) -> None:
     """Run continuous stream mode."""
-    if options.enroll_me:
-        enroll_interviewee_voice()
-        return
-
     stream_loop(options)
 
 
@@ -92,7 +84,6 @@ def stream_loop(options: RuntimeOptions) -> None:
         )
 
         try:
-            speaker_identifier = SpeakerIdentifier()
             photo_tracker = PhotoUploadTracker()
             while True:
                 segment = next_stream_segment(segment_queue)
@@ -101,7 +92,6 @@ def stream_loop(options: RuntimeOptions) -> None:
 
                 submitted = process_stream_segment(
                     segment,
-                    speaker_identifier,
                     options,
                     include_mode_prompt=is_first_submission,
                     photo_tracker=photo_tracker,
@@ -159,20 +149,17 @@ def next_stream_segment(
 
 def process_stream_segment(
     segment: CompletedStreamSegment,
-    speaker_identifier: SpeakerIdentifier,
     options: RuntimeOptions,
     include_mode_prompt: bool,
     photo_tracker: PhotoUploadTracker,
 ) -> bool:
     """Transcribe one stream segment and optionally submit it for feedback."""
     audio_path = segment.path
-    speaker_hint = build_speaker_hint(audio_path, speaker_identifier)
     try:
         transcript = segment.transcript
     finally:
         audio_path.unlink(missing_ok=True)
     print_transcript(transcript)
-    print_speaker_hint(speaker_hint)
 
     if not transcript:
         logger.info("No speech detected. Listening again.")
@@ -192,7 +179,6 @@ def process_stream_segment(
             build_stream_prompt(
                 transcript,
                 include_mode_prompt,
-                speaker_hint,
                 include_photo_context=photo_path is not None,
             ),
             photo_path=photo_path,
@@ -201,25 +187,6 @@ def process_stream_segment(
             photo_tracker.last_signature = photo_signature
     logger.info("")
     return options.ask_chatgpt
-
-
-def build_speaker_hint(audio_path: Path, speaker_identifier: SpeakerIdentifier) -> SpeakerHint:
-    """Return a speaker hint, falling back gracefully when matching is unavailable."""
-    try:
-        return speaker_identifier.match(audio_path)
-    except RuntimeError as error:
-        logger.warning("Voice matching unavailable: {}", error)
-        return SpeakerHint(
-            role_hint="unknown",
-            confidence=None,
-            similarity=None,
-            profile_available=False,
-        )
-
-
-def print_speaker_hint(speaker_hint: SpeakerHint) -> None:
-    """Print the voice match confidence for the most recent segment."""
-    logger.info("Interviewee voice hint: {}", speaker_hint.log_value())
 
 
 def print_stream_mode_banner(options: RuntimeOptions) -> None:

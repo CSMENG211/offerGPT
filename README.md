@@ -3,8 +3,8 @@
 SecondVoice is a voice-triggered mock interview evaluator.
 
 It captures audio from your microphone, transcribes it locally with
-mlx-whisper, and sends each transcript segment to ChatGPT for role
-classification, context tracking, and answer feedback.
+mlx-whisper, and sends each transcript segment to ChatGPT for context
+tracking and answer feedback.
 
 SecondVoice now uses a single streaming transcription path during live capture.
 Instead of one fast draft transcription plus a second slower final
@@ -12,7 +12,7 @@ transcription, it continuously builds transcript drafts with the live ASR model,
 waits for repeated draft agreement, and then runs semantic completion on the
 stabilized transcript text.
 
-The raw WAV is still preserved long enough for speaker matching and cleanup.
+The raw WAV is still preserved long enough for cleanup.
 
 ### Install
 
@@ -64,8 +64,7 @@ Stream and submit to ChatGPT:
 .venv/bin/python main.py
 ```
 
-Print transcripts and interviewee voice confidence without submitting to
-ChatGPT:
+Print transcripts without submitting to ChatGPT:
 
 ```sh
 .venv/bin/python main.py --no-ask
@@ -75,12 +74,6 @@ Run without photo capture or upload:
 
 ```sh
 .venv/bin/python main.py --no-ask --photo-mode none
-```
-
-Record an interviewee voice profile:
-
-```sh
-.venv/bin/python main.py --enroll
 ```
 
 Run with photo mode:

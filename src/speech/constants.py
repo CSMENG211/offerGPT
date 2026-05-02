@@ -1,6 +1,3 @@
-from pathlib import Path
-
-
 TRANSCRIPTION_BACKEND_FASTER_WHISPER = "faster-whisper"
 TRANSCRIPTION_BACKEND_MLX_WHISPER = "mlx-whisper"
 DEFAULT_ENDPOINT_TRANSCRIPTION_BACKEND = TRANSCRIPTION_BACKEND_MLX_WHISPER
@@ -45,27 +42,6 @@ TRANSCRIPTION_INITIAL_PROMPT = (
     f"Coding interview terms may include: {CODING_TRANSCRIPTION_TERMS} "
     f"System design terms may include: {SYSTEM_DESIGN_TRANSCRIPTION_TERMS}"
 )
-
-SPEAKER_PROFILE_DIR = Path.home() / ".secondvoice"
-SPEAKER_PROFILE_METADATA_PATH = SPEAKER_PROFILE_DIR / "interviewee-voice-profile.json"
-SPEAKER_PROFILE_EMBEDDING_PATH = SPEAKER_PROFILE_DIR / "interviewee-voice-embedding.pt"
-SPEAKER_MODEL_SOURCE = "speechbrain/spkrec-ecapa-voxceleb"
-SPEAKER_MODEL_DIR = SPEAKER_PROFILE_DIR / "speaker-model"
-SPEAKER_MATCH_THRESHOLD = 0.65
-SPEAKER_ENROLLMENT_SILENCE_SECONDS = 1.5
-SPEAKER_ENROLLMENT_MAX_SECONDS = 10.0
-SPEAKER_ENROLLMENT_PROMPTS = [
-    "I would start by clarifying the input constraints and expected output.",
-    "My first approach is brute force, then I would optimize using a hash map.",
-    "The time complexity is O of n, and the space complexity is O of n.",
-    "Could I confirm whether the array contains negative numbers or duplicates?",
-    "Let me walk through a small example to verify the logic.",
-    "For the system design, I would first clarify the scale, users, and latency requirements.",
-    "The main components are an API gateway, application servers, a database, and a cache.",
-    "For high read traffic, I would add caching with Redis and define cache invalidation.",
-    "The database choice depends on query patterns, consistency needs, and write volume.",
-    "Let me summarize the tradeoffs before choosing the final design.",
-]
 
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
 DEFAULT_ENDPOINT_MODEL = "qwen2.5:1.5b"
